@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: postgres_db_local
+    restart: always
+    # Загружаем переменные из .env, чтобы создать юзера и базу
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      # ВАЖНО: Пробрасываем порт 5432 из контейнера на 5432 твоего компьютера
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      # Сохраняем данные, чтобы они не пропали после рестарта
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+  
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin_panel
+    restart: always
+    environment:
+      # Это логин и пароль для входа в сам интерфейс pgAdmin
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"  # Будет доступен по адресу http://localhost:5050
+    depends_on:
+      - db
+
+volumes:
+  postgres_data:

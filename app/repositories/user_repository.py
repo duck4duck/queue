@@ -34,7 +34,7 @@ class UserRepository:
         return user
 
     async def create_user(self, user_data: UserCreate) -> User:
-        db_user = User(**user_data.model_dump())
+        db_user = User(**user_data.model_dump(mode="json"))
         self.db.add(db_user)
         await self.db.commit()
         await self.db.refresh(db_user)
