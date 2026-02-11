@@ -22,7 +22,7 @@ class UserService:
         user = await self.repository.get_by_tg_id(tg_id=tg_id)
         return UserResponse.model_validate(user)
     
-    async def get_user_by_tg_id(self,username: str) -> UserResponse:
+    async def get_user_by_username(self,username: str) -> UserResponse:
         user = await self.repository.get_by_username(username=username)
         return UserResponse.model_validate(user)
     

@@ -39,3 +39,4 @@ class UserRepository:
         await self.db.commit()
         await self.db.refresh(db_user)
         return db_user
+    

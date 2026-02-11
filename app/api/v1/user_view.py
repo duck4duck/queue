@@ -25,3 +25,5 @@ async def get_user(user_id: int,db: AsyncSession = Depends(get_db)):
 async def add_user(user_info:User,db:AsyncSession = Depends(get_db)):
     user_service = UserService(db)
     return await user_service.create_user(user_info)
+
+
