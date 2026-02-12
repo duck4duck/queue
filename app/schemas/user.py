@@ -21,7 +21,8 @@ class UserListResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class UserUpdate(User):
-    name: str | None 
-    tg_id: int | None
-    photo_url: HttpUrl | None
+class UserUpdate(BaseModel):
+    name: str | None = None
+    photo_url: HttpUrl | None = None
+
+    model_config = ConfigDict(from_attributes=True)
