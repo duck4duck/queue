@@ -37,5 +37,24 @@ services:
     depends_on:
       - db
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis_local
+    restart: always
+    ports:
+      # Пробрасываем стандартный порт Redis
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      # Сохраняем данные Redis между рестартами
+      - redis_data:/data
+    # Запускаем с AOF-персистенцией для надёжности
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_secret}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secret}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
 volumes:
   postgres_data:
+  redis_data:

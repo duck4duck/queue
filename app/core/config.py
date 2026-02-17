@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     db_name: str
     db_user: str
     db_password: str
+    redis_host: str
+    redis_port: str
     @property
     def database_url(self) -> str:
         return (

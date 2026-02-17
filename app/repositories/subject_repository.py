@@ -27,7 +27,7 @@ class SubjectRepository:
         subject = result.scalar_one_or_none()
         return subject
 
-    async def create_subject(self, subject_data: SubjectCreate ) -> User:
+    async def create_subject(self, subject_data: SubjectCreate ):
         db_subject = Subject(**subject_data.model_dump(mode="json"))
         self.db.add(db_subject)
         await self.db.commit()
