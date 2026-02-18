@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 import uvicorn
 from app.api.router import main_router
-
+from app.schemas.exception import UserNotFound
 
 app = FastAPI()
 app.include_router(main_router)

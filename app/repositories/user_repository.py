@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.user import User
-from app.schemas.user import User as UserCreate,UserUpdate
+from app.schemas.user import User as UserCreate,UserUpdate, QueueUser
 from typing import List, Optional
 from sqlalchemy import select,delete
 
@@ -50,6 +50,11 @@ class UserRepository:
         await self.db.commit()
         await self.db.refresh(user)
         return user
+    
+    async def get_by_tg_ids(self,ids:list[int]):
+        stmt = select(User).where(User.tg_id.in_(ids))
+        result = await self.db.execute(stmt)
+        return result.scalars().all()
 
     async def update_user_by_id(self,id:int,user_data: UserUpdate):
         stmt = select(User).where(User.id == id)

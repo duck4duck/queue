@@ -9,6 +9,22 @@ class User(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class QueueUser(User):
+    position: str | None = None
+
+
+class Queue(BaseModel):
+    subject: str
+    users:List[QueueUser]
+    total: int
+
+
+class ListOfQueueUser(BaseModel):
+    users: List[QueueUser]
+    total: int
+
+    model_config = ConfigDict(from_attributes=True)
+
 
 class UserResponse(User):
     id: int 
@@ -26,3 +42,4 @@ class UserUpdate(BaseModel):
     photo_url: HttpUrl | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
