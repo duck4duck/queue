@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.user_repository import UserRepository
 from typing import List,Optional
-from app.schemas.user import UserResponse,UserListResponse,User,UserUpdate,QueueUser,ListOfQueueUser
+from app.schemas.user import UserResponse,UserListResponse,User,UserUpdate
 
 
 class UserService:
@@ -46,7 +46,6 @@ class UserService:
         user = await self.repository.delete_user_by_tg_id(id)
         return {"message":"user succefully deleted!"}
     
-    async def get_by_tg_ids(self,ids:list[int]) -> list[QueueUser]:
+    async def get_by_tg_ids(self,ids:list[int]) -> list[User]:
         users = await self.repository.get_by_tg_ids(ids)
-        users_response = [QueueUser.model_validate(u) for u in users]
-        return ListOfQueueUser(users=users_response,total=len(users_response))
+        return users

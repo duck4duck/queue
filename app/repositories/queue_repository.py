@@ -9,45 +9,75 @@ class QueueRepository:
     def _queue_key (self,subject: str) -> str:
         return f"queue:{subject}"
     
-    async def queue_exists(self,subject) -> str:
+    async def queue_exists(self,subject: str) -> str:
         return await self.r.exists(self._queue_key(subject)) == 1
     
-    async def add(self,subject: str,user_id: str) -> None:
-        score = time.time()
-        await self.r.zadd(self._queue_key(subject),{user_id: score})
+    async def add(self,subject: str,user_id: int,position: int) -> None:
+        await self.r.hset(self._queue_key(subject),position,user_id)
 
-    async def remove(self,subject: str,user_id: str) -> None:
-        await self.r.zrem(self._queue_key(subject),user_id)
+    async def remove(self,subject: str,position: int) -> None:
+        await self.r.hdel(self._queue_key(subject),position)
 
-    async def exists(self,subject: str,user_id: str) -> bool:
-        return await self.r.zrank(self._queue_key(subject),user_id) is not None
+    async def remove_by_user(self,subject: str,user_id: int) -> bool:
+        key = self._queue_key(subject)
+        users = await self.r.hgetall(key)
+        for position,uid in users.items():
+            if user_id == uid:
+                await self.r.hdel(key,position)
+                return
+            
+    async def is_position_taken(self,subject: str,position: int):
+        return await self.r.hexists(self._queue_key(subject),position)
     
-    async def get_queue(self,subject: str) -> list[dict]:
-        members = await self.r.zrange(self._queue_key(subject),0,-1)
+    async def is_user_in_queue(self,subject: str,user_id: int) -> bool:
+        key = self._queue_key(subject)
+        users = await self.r.hgetall(key)
+        for position,uid in users.items():
+            if user_id == uid:
+                
+                return True
         
-        result = []
-        for i,uid in enumerate(members,1):
-            result.append({"position":i,"id": uid})
-        return result
-
-    async def get_position(self,subject: str,user_id: str) -> int | None:
-        rank = await self.r.zrank(self._queue_key(subject),user_id)
-        if rank is not None:
-            return rank + 1
+        return False
+    
+    async def get_position(self,subject: str,user_id: int) -> bool:
+        key = self._queue_key(subject)
+        users = await self.r.hgetall(key)
+        for position,uid in users.items():
+            if user_id == uid:
+                
+                return int(position)
         
         return None
-    
-    async def swap(self,subject: str,uid1: str,uid2: str) -> None:
-        key = self._queue_key(subject)
-        score1 = await self.r.zscore(key,uid1)
-        score2 = await self.r.zscore(key,uid2)
 
-        if score1 is not None and score2 is not None:
-            pipe = self.r.pipeline(transaction=True)
-            await pipe.zadd(key,{uid1:score2})
-            await pipe.zadd(key,{uid2,score1})
-            await pipe.execute()
+    
+    async def get_queue(self,subject: int) -> dict:
+        key = self._queue_key(subject)
+        users = await self.r.hgetall(key)
+        return {int(slot): int(uid) for slot,uid in users.items()}
+        
+       
+   
+    
+    async def swap(self,subject: str,pos1: int,pos2: int) -> None:
+        key = self._queue_key(subject)
+        uid1 = await self.r.hget(key,pos1)
+        uid2 = await self.r.hget(key,pos2)
+
+        pipe = self.r.pipeline(transaction=True)
+        if uid1 and uid2:
+            pipe.hset(key,pos1,uid2)
+            pipe.hset(key,pos2,uid1)
+
+        await pipe.execute()
+
+        
+
+    
 
     async def clear(self,subject: str) -> None:
         await self.r.delete(self._queue_key(subject))
+
+
+    async def size(self, subject: str):
+        return await self.r.hlen(self.get_queue(subject))
     

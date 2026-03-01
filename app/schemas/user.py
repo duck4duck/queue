@@ -1,7 +1,6 @@
 from pydantic import BaseModel,HttpUrl,ConfigDict
 from typing import List
 
-
 class User(BaseModel):
     name: str
     tg_id: int
@@ -9,21 +8,6 @@ class User(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class QueueUser(User):
-    position: str | None = None
-
-
-class Queue(BaseModel):
-    subject: str
-    users:List[QueueUser]
-    total: int
-
-
-class ListOfQueueUser(BaseModel):
-    users: List[QueueUser]
-    total: int
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class UserResponse(User):
@@ -42,4 +26,7 @@ class UserUpdate(BaseModel):
     photo_url: HttpUrl | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+
 

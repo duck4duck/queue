@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     redis_host: str
     redis_port: str
     redis_password: str
+    redis_insight_port: str
     @property
     def database_url(self) -> str:
         return (

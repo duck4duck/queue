@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.subject import Subject
-from app.schemas.subejct import Subject as SubjectCreate
+from app.schemas.subject import Subject as SubjectCreate
 from typing import List, Optional
 from sqlalchemy import select
 

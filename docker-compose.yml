@@ -54,6 +54,15 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    
+  redis-insight:
+    image: redis/redisinsight:latest
+    container_name: redis_insight
+    restart: always
+    ports:
+      - "${REDIS_INSIGHT_PORT:-5540}:5540"
+    depends_on:
+      - redis
 
 volumes:
   postgres_data:

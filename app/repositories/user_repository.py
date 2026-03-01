@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.user import User
-from app.schemas.user import User as UserCreate,UserUpdate, QueueUser
+from app.schemas.user import User as UserCreate,UserUpdate
 from typing import List, Optional
 from sqlalchemy import select,delete
 
