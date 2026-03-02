@@ -69,7 +69,6 @@ class QueueService:
                     tg_id=uid,
                     name=user.name,
                     photo_url=user.photo_url,
-                    action="get",
                     is_free=False
                 ))
             else:

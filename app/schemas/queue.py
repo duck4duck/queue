@@ -3,18 +3,13 @@ from pydantic import BaseModel,HttpUrl,ConfigDict
 
 
 
-class QueueActionType(str,Enum):
-    JOIN = "join"
-    LEAVE = "leave"
-    SWAP = "swap"
-    GET = "get"
+
 
 class QueueUserInfo(BaseModel):
-    action: QueueActionType
-    name: str
-    tg_id: int | None = None
-    target_tg_id: int | None = None
+    name: str | None = None
     position: int | None = None
+    target_position: int | None = None
+    position: int 
     photo_url: HttpUrl | None = None
     is_free: bool
 

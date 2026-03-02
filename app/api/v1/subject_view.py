@@ -5,6 +5,7 @@ from redis.asyncio import Redis
 from app.db.postgres.database import get_db
 from app.db.redis.redis_client import get_redis
 from app.api.ws_manager import manager
+from app.schemas.dto import SwapDto,UserDto
 
 router = APIRouter(prefix="/queue",tags=["queue"])
 
@@ -16,10 +17,10 @@ async def get_queue(subject: str,db: AsyncSession = Depends(get_db),r: Redis = D
     return await queue_service.get_queue(subject)
 
 @router.post("/{subject}/join")
-async def join_queue(subject: str,tg_id: int,position: int,db: AsyncSession = Depends(get_db),r: Redis = Depends(get_redis)):
+async def join_queue(subject: str,user_data: UserDto ,db: AsyncSession = Depends(get_db),r: Redis = Depends(get_redis)):
     queue_service = QueueService(db,r)
 
-    await queue_service.join(subject,tg_id,position)
+    await queue_service.join(subject,user_data.tg_id,user_data.position)
 
     queue_data = await queue_service.get_queue(subject)
     await manager.broadcast(subject,{
@@ -30,10 +31,10 @@ async def join_queue(subject: str,tg_id: int,position: int,db: AsyncSession = De
     return {"status":"joined"}
 
 @router.post("/{subject}/leave")
-async def leave_queue(subject: str,tg_id: int,position: int,db: AsyncSession = Depends(get_db),r: Redis = Depends(get_redis)):
+async def leave_queue(subject: str,user_data: UserDto,db: AsyncSession = Depends(get_db),r: Redis = Depends(get_redis)):
     queue_service = QueueService(db,r)
 
-    await queue_service.leave(subject,tg_id,position)
+    await queue_service.leave(subject,user_data.tg_id,user_data.position)
 
     queue_data = await queue_service.get_queue(subject)
     await manager.broadcast(subject,{
@@ -44,10 +45,10 @@ async def leave_queue(subject: str,tg_id: int,position: int,db: AsyncSession = D
     return {"status":"left"}
 
 @router.post("/{subject}/swap")
-async def swap_in_queue(subject: str,position1: int,position2: int,db: AsyncSession = Depends(get_db),r: Redis = Depends(get_redis)):
+async def swap_in_queue(subject: str,user_data: SwapDto,db: AsyncSession = Depends(get_db),r: Redis = Depends(get_redis)):
     queue_service = QueueService(db,r)
 
-    await queue_service.swap(position1,position2,subject)
+    await queue_service.swap(user_data.position1,user_data.position2,subject)
 
     queue_data = await queue_service.get_queue(subject)
     await manager.broadcast(subject,{
