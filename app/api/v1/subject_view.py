@@ -1,59 +1,76 @@
-from fastapi import APIRouter,Depends
+from fastapi import APIRouter, Depends
 from app.services.queue_service import QueueService
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 from app.db.postgres.database import get_db
 from app.db.redis.redis_client import get_redis
 from app.api.ws_manager import manager
-from app.schemas.dto import SwapDto,UserDto
+from app.schemas.dto import SwapDto, UserDto
 
-router = APIRouter(prefix="/queue",tags=["queue"])
+router = APIRouter(prefix="/queue", tags=["queue"])
 
 
 @router.get("/{subject}")
-async def get_queue(subject: str,db: AsyncSession = Depends(get_db),r: Redis = Depends(get_redis)):
-    queue_service = QueueService(db,r)
-    
+async def get_queue(
+    subject: str, db: AsyncSession = Depends(get_db), r: Redis = Depends(get_redis)
+):
+    queue_service = QueueService(db, r)
+
     return await queue_service.get_queue(subject)
 
-@router.post("/{subject}/join")
-async def join_queue(subject: str,user_data: UserDto ,db: AsyncSession = Depends(get_db),r: Redis = Depends(get_redis)):
-    queue_service = QueueService(db,r)
 
-    await queue_service.join(subject,user_data.tg_id,user_data.position)
+@router.post("/{subject}/join")
+async def join_queue(
+    subject: str,
+    user_data: UserDto,
+    db: AsyncSession = Depends(get_db),
+    r: Redis = Depends(get_redis),
+):
+    queue_service = QueueService(db, r)
+
+    await queue_service.join(subject, user_data.tg_id, user_data.position)
 
     queue_data = await queue_service.get_queue(subject)
-    await manager.broadcast(subject,{
-        "event": "queue_updated",
-        "data": queue_data.model_dump(mode="json")
-    })
+    await manager.broadcast(
+        subject, {"event": "queue_updated", "data": queue_data.model_dump(mode="json")}
+    )
 
-    return {"status":"joined"}
+    return {"status": "joined"}
+
 
 @router.post("/{subject}/leave")
-async def leave_queue(subject: str,user_data: UserDto,db: AsyncSession = Depends(get_db),r: Redis = Depends(get_redis)):
-    queue_service = QueueService(db,r)
+async def leave_queue(
+    subject: str,
+    user_data: UserDto,
+    db: AsyncSession = Depends(get_db),
+    r: Redis = Depends(get_redis),
+):
+    queue_service = QueueService(db, r)
 
-    await queue_service.leave(subject,user_data.tg_id,user_data.position)
+    await queue_service.leave(subject, user_data.tg_id, user_data.position)
 
     queue_data = await queue_service.get_queue(subject)
-    await manager.broadcast(subject,{
-        "event": "queue_updated",
-        "data": queue_data.model_dump(mode="json")
-    })
+    await manager.broadcast(
+        subject, {"event": "queue_updated", "data": queue_data.model_dump(mode="json")}
+    )
 
-    return {"status":"left"}
+    return {"status": "left"}
+
 
 @router.post("/{subject}/swap")
-async def swap_in_queue(subject: str,user_data: SwapDto,db: AsyncSession = Depends(get_db),r: Redis = Depends(get_redis)):
-    queue_service = QueueService(db,r)
+async def swap_in_queue(
+    subject: str,
+    user_data: SwapDto,
+    db: AsyncSession = Depends(get_db),
+    r: Redis = Depends(get_redis),
+):
+    queue_service = QueueService(db, r)
 
-    await queue_service.swap(user_data.position1,user_data.position2,subject)
+    await queue_service.swap(user_data.position1, user_data.position2, subject)
 
     queue_data = await queue_service.get_queue(subject)
-    await manager.broadcast(subject,{
-        "event": "queue_updated",
-        "data": queue_data.model_dump(mode="json")
-    })
+    await manager.broadcast(
+        subject, {"event": "queue_updated", "data": queue_data.model_dump(mode="json")}
+    )
 
-    return {"status":"swapped"}
+    return {"status": "swapped"}

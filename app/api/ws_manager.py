@@ -1,23 +1,28 @@
 from fastapi import WebSocket
 import json
 
+
 class WSManager:
     def __init__(self):
-        self.connections: dict[str,list[WebSocket]] = {}
+        self.connections: dict[str, list[WebSocket]] = {}
 
-    async def connect(self,websocket: WebSocket,subject: str,):
+    async def connect(
+        self,
+        websocket: WebSocket,
+        subject: str,
+    ):
         await websocket.accept()
         if subject not in self.connections:
             self.connections[subject] = []
         self.connections[subject].append(websocket)
 
-    def disconnect(self,websoket: WebSocket,subject: str):
+    def disconnect(self, websoket: WebSocket, subject: str):
         if subject in self.connections:
             self.connections[subject].remove(websoket)
         if not self.connections[subject]:
             del self.connections[subject]
 
-    async def broadcast(self,subject: str,data: dict):
+    async def broadcast(self, subject: str, data: dict):
         if subject not in self.connections:
             return
         dead = []

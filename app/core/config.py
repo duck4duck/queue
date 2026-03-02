@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 
+
 class Settings(BaseSettings):
     app_name: str = "Queue"
     debug: bool = True
@@ -12,6 +13,7 @@ class Settings(BaseSettings):
     redis_port: str
     redis_password: str
     redis_insight_port: str
+
     @property
     def database_url(self) -> str:
         return (
@@ -19,11 +21,8 @@ class Settings(BaseSettings):
             f"@{self.db_host}:{self.db_port}/{self.db_name}"
         )
 
-
     class Config:
-       env_file = ".env"
-
+        env_file = ".env"
 
 
 settings = Settings()
-

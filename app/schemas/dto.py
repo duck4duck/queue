@@ -3,7 +3,7 @@ from pydantic import BaseModel
 
 class UserDto(BaseModel):
     tg_id: int
-    position:int 
+    position: int
 
 
 class SwapDto(BaseModel):
