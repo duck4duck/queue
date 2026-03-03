@@ -2,7 +2,7 @@ from app.repositories.queue_repository import QueueRepository
 from app.services.user_service import UserService
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
-from app.schemas.exception import UserExist, UserNotFound, UserNotExist
+from app.schemas.exception import UserAlreadyInQueue,UserNotInQueue,PositionTaken,UserNotFound,InvalidPosition
 from app.schemas.queue import QueueUserInfo, QueueResponse
 
 
@@ -22,20 +22,20 @@ class QueueService:
             raise UserNotFound("Пользователь не найден!")
 
         if position < 1 or position > MAX_POSITIONS_IN_QUEUE:
-            raise ValueError("Неккоректное число.Число должно быть от 1 до 30!")
+            raise InvalidPosition("Неккоректное число.Число должно быть от 1 до 30!")
 
         if await self.r.is_user_in_queue(subject, user_id):
-            raise UserExist("Вы уже есть в этйо очереди!")
+            raise UserAlreadyInQueue("Вы уже есть в этой очереди!")
 
         if await self.r.is_position_taken(subject, position):
-            raise UserExist("Место занято!")
+            raise PositionTaken("Место занято!")
 
         await self.r.add(subject, user_id, position)
         return await self.get_queue(subject)
 
     async def leave(self, subject: str, user_id: int, position: int) -> QueueResponse:
         if not await self.r.is_user_in_queue(subject, user_id):
-            raise UserNotExist("Пользователь не в очереди!")
+            raise UserNotInQueue("Пользователь не в очереди!")
 
         await self.r.remove(subject, position)
 
@@ -83,10 +83,10 @@ class QueueService:
 
     async def swap(self, pos1: int, pos2: int, subject: str) -> QueueResponse:
         if not await self.r.is_user_in_queue(subject, pos2):
-            raise UserNotFound("Пользователь 1 не найден!")
+            raise UserNotInQueue("Пользователь 1 в очереди не найден!")
 
         if not await self.r.is_user_in_queue(subject, pos1):
-            raise UserNotFound("Пользователь 2 не найден!")
+            raise UserNotInQueue("Пользователь 2 в очереди не найден!")
 
         await self.r.swap(subject, pos1, pos2)
         return await self.r.get_queue(subject)
