@@ -1,11 +1,12 @@
-from pydantic import BaseModel, HttpUrl, ConfigDict
+from pydantic import BaseModel, ConfigDict
 from typing import List
 
 
 class User(BaseModel):
     name: str
     tg_id: int
-    photo_url: HttpUrl | None = None
+    photo_url: str | None = None
+    role: str = "student"
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -23,6 +24,7 @@ class UserListResponse(BaseModel):
 
 class UserUpdate(BaseModel):
     name: str | None = None
-    photo_url: HttpUrl | None = None
+    photo_url: str | None = None
+    role: str | None = None
 
     model_config = ConfigDict(from_attributes=True)

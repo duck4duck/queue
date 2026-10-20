@@ -5,7 +5,6 @@ services:
     image: postgres:15-alpine
     container_name: postgres_db_local
     restart: always
-    # Загружаем переменные из .env, чтобы создать юзера и базу
     env_file:
       - .env
     environment:
@@ -13,48 +12,61 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_DB: ${DB_NAME}
     ports:
-      # ВАЖНО: Пробрасываем порт 5432 из контейнера на 5432 твоего компьютера
       - "${DB_PORT:-5432}:5432"
     volumes:
-      # Сохраняем данные, чтобы они не пропали после рестарта
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 5s
       timeout: 5s
       retries: 5
-  
-  pgadmin:
-    image: dpage/pgadmin4
-    container_name: pgadmin_panel
-    restart: always
-    environment:
-      # Это логин и пароль для входа в сам интерфейс pgAdmin
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
-    ports:
-      - "5050:80"  # Будет доступен по адресу http://localhost:5050
-    depends_on:
-      - db
 
   redis:
     image: redis:7-alpine
     container_name: redis_local
     restart: always
     ports:
-      # Пробрасываем стандартный порт Redis
       - "${REDIS_PORT:-6379}:6379"
     volumes:
-      # Сохраняем данные Redis между рестартами
       - redis_data:/data
-    # Запускаем с AOF-персистенцией для надёжности
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_secret}
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-redis_secret}", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
-    
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: queue_app
+    restart: always
+    env_file:
+      - .env
+    environment:
+      DB_HOST: db
+      REDIS_HOST: redis
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin_panel
+    restart: always
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@admin.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - db
+
   redis-insight:
     image: redis/redisinsight:latest
     container_name: redis_insight

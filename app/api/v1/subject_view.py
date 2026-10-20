@@ -1,76 +1,40 @@
-from fastapi import APIRouter, Depends
-from app.services.queue_service import QueueService
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from redis.asyncio import Redis
 from app.db.postgres.database import get_db
-from app.db.redis.redis_client import get_redis
-from app.api.ws_manager import manager
-from app.schemas.dto import SwapDto, UserDto
+from app.services.subject_service import SubjectService
+from app.schemas.subject import Subject, SubjectResponse, ListOfSubjects
 
-router = APIRouter(prefix="/queue", tags=["queue"])
-
-
-@router.get("/{subject}")
-async def get_queue(
-    subject: str, db: AsyncSession = Depends(get_db), r: Redis = Depends(get_redis)
-):
-    queue_service = QueueService(db, r)
-
-    return await queue_service.get_queue(subject)
+router = APIRouter(prefix="/api/subjects", tags=["subjects"])
 
 
-@router.post("/{subject}/join")
-async def join_queue(
-    subject: str,
-    user_data: UserDto,
+@router.get("", response_model=ListOfSubjects, status_code=status.HTTP_200_OK)
+async def get_all_subjects(
+    search: str | None = None,
+    skip: int = 0,
+    limit: int = 100,
     db: AsyncSession = Depends(get_db),
-    r: Redis = Depends(get_redis),
 ):
-    queue_service = QueueService(db, r)
-
-    await queue_service.join(subject, user_data.tg_id, user_data.position)
-
-    queue_data = await queue_service.get_queue(subject)
-    await manager.broadcast(
-        subject, {"event": "queue_updated", "data": queue_data.model_dump(mode="json")}
-    )
-
-    return {"status": "joined"}
+    """Get the catalog of all available subjects with optional search query."""
+    service = SubjectService(db)
+    return await service.get_all_subjects(search=search, skip=skip, limit=limit)
 
 
-@router.post("/{subject}/leave")
-async def leave_queue(
-    subject: str,
-    user_data: UserDto,
-    db: AsyncSession = Depends(get_db),
-    r: Redis = Depends(get_redis),
-):
-    queue_service = QueueService(db, r)
-
-    await queue_service.leave(subject, user_data.tg_id, user_data.position)
-
-    queue_data = await queue_service.get_queue(subject)
-    await manager.broadcast(
-        subject, {"event": "queue_updated", "data": queue_data.model_dump(mode="json")}
-    )
-
-    return {"status": "left"}
+@router.get("/{id}", response_model=SubjectResponse, status_code=status.HTTP_200_OK)
+async def get_subject_by_id(id: int, db: AsyncSession = Depends(get_db)):
+    """Get subject by its database ID."""
+    service = SubjectService(db)
+    return await service.get_subject_by_id(id)
 
 
-@router.post("/{subject}/swap")
-async def swap_in_queue(
-    subject: str,
-    user_data: SwapDto,
-    db: AsyncSession = Depends(get_db),
-    r: Redis = Depends(get_redis),
-):
-    queue_service = QueueService(db, r)
+@router.post("", response_model=SubjectResponse, status_code=status.HTTP_201_CREATED)
+async def create_subject(subject: Subject, db: AsyncSession = Depends(get_db)):
+    """Create a new subject in the catalog (e.g. 'Математика', 'Физика')."""
+    service = SubjectService(db)
+    return await service.create_subject(subject)
 
-    await queue_service.swap(user_data.position1, user_data.position2, subject)
 
-    queue_data = await queue_service.get_queue(subject)
-    await manager.broadcast(
-        subject, {"event": "queue_updated", "data": queue_data.model_dump(mode="json")}
-    )
-
-    return {"status": "swapped"}
+@router.delete("/{id}", status_code=status.HTTP_200_OK)
+async def delete_subject(id: int, db: AsyncSession = Depends(get_db)):
+    """Delete a subject by its ID."""
+    service = SubjectService(db)
+    return await service.delete_subject(id)

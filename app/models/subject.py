@@ -1,6 +1,6 @@
-from app.models.user import Base
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy import String, BigInteger
+from app.models.base import Base
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import String
 
 
 class Subject(Base):
