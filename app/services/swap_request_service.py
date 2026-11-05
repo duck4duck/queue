@@ -280,3 +280,53 @@ class SwapRequestService:
                 )
             )
         return SwapRequestListResponse(requests=result, total=len(result))
+
+    async def get_all_incoming_requests(
+        self, tg_id: int
+    ) -> SwapRequestListResponse:
+        requests = await self.swap_repo.get_all_incoming_requests(tg_id)
+        result = []
+        for req in requests:
+            from_user = await self.user_service.get_user_by_tg_id(int(req["from_tg_id"]))
+            to_user = await self.user_service.get_user_by_tg_id(int(req["to_tg_id"]))
+            result.append(
+                SwapRequestInfo(
+                    id=req["id"],
+                    subject=req["subject"],
+                    from_tg_id=int(req["from_tg_id"]),
+                    to_tg_id=int(req["to_tg_id"]),
+                    from_position=int(req["from_position"]),
+                    to_position=int(req["to_position"]),
+                    from_name=from_user.name if from_user else None,
+                    to_name=to_user.name if to_user else None,
+                    message=req.get("message", ""),
+                    status=req["status"],
+                    created_at=req.get("created_at", ""),
+                )
+            )
+        return SwapRequestListResponse(requests=result, total=len(result))
+
+    async def get_all_outgoing_requests(
+        self, tg_id: int
+    ) -> SwapRequestListResponse:
+        requests = await self.swap_repo.get_all_outgoing_requests(tg_id)
+        result = []
+        for req in requests:
+            from_user = await self.user_service.get_user_by_tg_id(int(req["from_tg_id"]))
+            to_user = await self.user_service.get_user_by_tg_id(int(req["to_tg_id"]))
+            result.append(
+                SwapRequestInfo(
+                    id=req["id"],
+                    subject=req["subject"],
+                    from_tg_id=int(req["from_tg_id"]),
+                    to_tg_id=int(req["to_tg_id"]),
+                    from_position=int(req["from_position"]),
+                    to_position=int(req["to_position"]),
+                    from_name=from_user.name if from_user else None,
+                    to_name=to_user.name if to_user else None,
+                    message=req.get("message", ""),
+                    status=req["status"],
+                    created_at=req.get("created_at", ""),
+                )
+            )
+        return SwapRequestListResponse(requests=result, total=len(result))

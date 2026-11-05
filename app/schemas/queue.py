@@ -19,6 +19,7 @@ class QueueResponse(BaseModel):
     total_positions: int
     taken_positions: int
     is_paused: bool = False
+    my_position: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -33,6 +34,7 @@ class QueueMetaInfo(BaseModel):
     taken_positions: int = 0
     total_positions: int = 30
     is_paused: bool = False
+    my_position: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

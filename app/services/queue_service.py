@@ -89,24 +89,27 @@ class QueueService:
             is_paused=False,
         )
 
-    async def delete_queue(self, subject: str, curator_tg_id: int) -> None:
-        """Curator deletes an entire queue."""
-        curator = await self.user_service.get_user_by_tg_id(curator_tg_id)
-        if curator is None:
+    async def _check_creator(self, subject: str, user_tg_id: int):
+        user = await self.user_service.get_user_by_tg_id(user_tg_id)
+        if user is None:
             raise UserNotFound("Пользователь не найден!")
-        if curator.role != "curator":
-            raise Forbidden("Только курирующий может удалить очередь!")
+        meta = await self.r.get_queue_meta(subject)
+        if meta is None:
+            raise QueueNotFound("Очередь не найдена!")
+        created_by = int(meta.get("created_by_tg_id", 0))
+        if created_by != user_tg_id:
+            raise Forbidden("Только создатель очереди имеет доступ к этому действию!")
+        return meta, user
 
+    async def delete_queue(self, subject: str, creator_tg_id: int) -> None:
+        """Only the creator can delete the entire queue."""
+        meta, user = await self._check_creator(subject, creator_tg_id)
         await self.r.clear(subject)
-        logger.info(f"Queue deleted: '{subject}' by curator {curator.name} (tg_id={curator_tg_id})")
+        logger.info(f"Queue deleted: '{subject}' by creator {user.name} (tg_id={creator_tg_id})")
 
-    async def clear_queue(self, subject: str, curator_tg_id: int) -> QueueResponse:
-        """Curator clears all students from the queue, preserving metadata and settings."""
-        curator = await self.user_service.get_user_by_tg_id(curator_tg_id)
-        if curator is None:
-            raise UserNotFound("Пользователь не найден!")
-        if curator.role != "curator":
-            raise Forbidden("Только курирующий может очистить очередь!")
+    async def clear_queue(self, subject: str, creator_tg_id: int) -> QueueResponse:
+        """Only the creator can clear all students from the queue."""
+        meta, user = await self._check_creator(subject, creator_tg_id)
 
         queue = await self.r.get_queue(subject)
         for uid in queue.values():
@@ -114,28 +117,25 @@ class QueueService:
             await self.r.remove_user_from_index(uid, subject)
 
         await self.r.clear_participants(subject)
-        await self.r.log_event(subject, "clear", f"Очередь полностью очищена куратором {curator.name}")
-        logger.info(f"Queue '{subject}' cleared by curator {curator.name}")
+        await self.r.log_event(subject, "clear", f"Очередь очищена создателем {user.name}")
+        logger.info(f"Queue '{subject}' cleared by creator {user.name}")
 
         return await self.get_queue(subject)
 
     async def pause_queue(
-        self, subject: str, curator_tg_id: int, paused: bool
+        self, subject: str, creator_tg_id: int, paused: bool
     ) -> QueueMetaInfo:
-        """Curator pauses or resumes queue."""
-        curator = await self.user_service.get_user_by_tg_id(curator_tg_id)
-        if curator is None:
-            raise UserNotFound("Пользователь не найден!")
-        if curator.role != "curator":
-            raise Forbidden("Только курирующий может изменить статус очереди!")
+        """Only the creator can pause or resume queue."""
+        meta, user = await self._check_creator(subject, creator_tg_id)
 
         await self.r.set_queue_pause(subject, paused)
         status_text = "Очередь приостановлена" if paused else "Очередь возобновлена"
-        await self.r.log_event(subject, "pause" if paused else "resume", f"{status_text} куратором {curator.name}")
-        logger.info(f"Queue '{subject}' pause={paused} by curator {curator.name}")
+        await self.r.log_event(subject, "pause" if paused else "resume", f"{status_text} создателем {user.name}")
+        logger.info(f"Queue '{subject}' pause={paused} by creator {user.name}")
 
         meta = await self.r.get_queue_meta(subject)
         taken = await self.r.size(subject)
+        my_pos = await self.r.get_position(subject, creator_tg_id)
 
         return QueueMetaInfo(
             subject=subject,
@@ -146,6 +146,7 @@ class QueueService:
             taken_positions=taken,
             total_positions=self.max_positions,
             is_paused=paused,
+            my_position=my_pos,
         )
 
     async def list_queues(
@@ -246,13 +247,9 @@ class QueueService:
     # ──────────────────── Curator Actions: Kick & Advance ────────────────────
 
     async def kick(
-        self, subject: str, curator_tg_id: int, target_tg_id: int
+        self, subject: str, creator_tg_id: int, target_tg_id: int
     ) -> QueueResponse:
-        curator = await self.user_service.get_user_by_tg_id(curator_tg_id)
-        if curator is None:
-            raise UserNotFound("Курирующий не найден!")
-        if curator.role != "curator":
-            raise Forbidden("Только курирующий может удалять пользователей из очереди!")
+        meta, user = await self._check_creator(subject, creator_tg_id)
 
         target = await self.user_service.get_user_by_tg_id(target_tg_id)
         target_name = target.name if target else f"ID {target_tg_id}"
@@ -267,20 +264,16 @@ class QueueService:
         await self.r.log_event(
             subject,
             "kick",
-            f"{target_name} (место #{freed_pos}) исключен(а) куратором {curator.name}",
+            f"{target_name} (место #{freed_pos}) исключен(а) создателем {user.name}",
         )
-        logger.info(f"Target {target_name} kicked from '{subject}' by curator {curator.name}")
+        logger.info(f"Target {target_name} kicked from '{subject}' by creator {user.name}")
 
         return await self.get_queue(subject)
 
     async def advance_queue(
-        self, subject: str, curator_tg_id: int
+        self, subject: str, creator_tg_id: int
     ) -> tuple[int, QueueResponse]:
-        curator = await self.user_service.get_user_by_tg_id(curator_tg_id)
-        if curator is None:
-            raise UserNotFound("Курирующий не найден!")
-        if curator.role != "curator":
-            raise Forbidden("Только курирующий может продвигать очередь!")
+        meta, user = await self._check_creator(subject, creator_tg_id)
 
         first_in_line = await self.r.get_first_in_line(subject)
         if first_in_line is None:
@@ -362,6 +355,7 @@ class QueueService:
             meta = await self.r.get_queue_meta(subject)
             taken = await self.r.size(subject)
             is_paused = (meta.get("is_paused") == "true") if meta else False
+            my_pos = await self.r.get_position(subject, tg_id)
             result.append(
                 QueueMetaInfo(
                     subject=subject,
@@ -372,6 +366,7 @@ class QueueService:
                     taken_positions=taken,
                     total_positions=self.max_positions,
                     is_paused=is_paused,
+                    my_position=my_pos,
                 )
             )
         return result
@@ -403,14 +398,14 @@ class QueueService:
     # ──────────────────── Swap Candidates ────────────────────
 
     async def get_swap_candidates(self, subject: str, tg_id: int) -> list[SwapCandidate]:
-        """Get all participants who are ahead of the current user in line."""
+        """Get all participants available for swapping (both ahead and behind)."""
         my_pos = await self.r.get_position(subject, tg_id)
         if my_pos is None:
             raise UserNotInQueue("Вы не состоите в этой очереди!")
 
         queue = await self.r.get_queue(subject)
-        # Find all occupied positions ahead of me
-        candidates_positions = {pos: uid for pos, uid in queue.items() if pos < my_pos}
+        # Find all occupied positions except my own
+        candidates_positions = {pos: uid for pos, uid in queue.items() if pos != my_pos}
 
         if not candidates_positions:
             return []

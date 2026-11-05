@@ -37,7 +37,12 @@ async def create_queue(
         queue_type=data.queue_type,
         created_by_tg_id=data.created_by_tg_id,
     )
-    return {"status": "created", "data": meta.model_dump(mode="json")}
+    meta_json = meta.model_dump(mode="json")
+    await manager.broadcast_all({
+        "event": "queue_created",
+        "data": meta_json,
+    })
+    return {"status": "created", "data": meta_json}
 
 
 @router.get("/list")
@@ -149,9 +154,9 @@ async def join_queue(
     await queue_service.join(subject, user_data.tg_id, user_data.position)
 
     queue_data = await queue_service.get_queue(subject)
-    await manager.broadcast(
-        subject, {"event": "queue_updated", "data": queue_data.model_dump(mode="json")}
-    )
+    event_data = {"event": "queue_updated", "subject": subject, "data": queue_data.model_dump(mode="json")}
+    await manager.broadcast(subject, event_data)
+    await manager.broadcast_all(event_data)
 
     return {"status": "joined"}
 
@@ -168,9 +173,9 @@ async def leave_queue(
     await queue_service.leave(subject, user_data.tg_id, user_data.position)
 
     queue_data = await queue_service.get_queue(subject)
-    await manager.broadcast(
-        subject, {"event": "queue_updated", "data": queue_data.model_dump(mode="json")}
-    )
+    event_data = {"event": "queue_updated", "subject": subject, "data": queue_data.model_dump(mode="json")}
+    await manager.broadcast(subject, event_data)
+    await manager.broadcast_all(event_data)
 
     return {"status": "left"}
 
@@ -187,21 +192,21 @@ async def kick_from_queue(
     await queue_service.kick(subject, data.curator_tg_id, data.target_tg_id)
 
     queue_data = await queue_service.get_queue(subject)
-    await manager.broadcast(
-        subject,
-        {
-            "event": "queue_updated",
-            "data": queue_data.model_dump(mode="json"),
-            "kicked_tg_id": data.target_tg_id,
-        },
-    )
+    event_data = {
+        "event": "queue_updated",
+        "subject": subject,
+        "data": queue_data.model_dump(mode="json"),
+        "kicked_tg_id": data.target_tg_id,
+    }
+    await manager.broadcast(subject, event_data)
+    await manager.broadcast_all(event_data)
 
     await manager.send_to_user(
         data.target_tg_id,
         {
             "event": "kicked",
             "subject": subject,
-            "message": "Вы были удалены из очереди курирующим.",
+            "message": "Вы были удалены из очереди создателем.",
         },
     )
 
@@ -221,14 +226,14 @@ async def advance_queue(
         subject, data.curator_tg_id
     )
 
-    await manager.broadcast(
-        subject,
-        {
-            "event": "queue_advanced",
-            "completed_tg_id": completed_user_id,
-            "data": updated_queue.model_dump(mode="json"),
-        },
-    )
+    event_advance = {
+        "event": "queue_advanced",
+        "subject": subject,
+        "completed_tg_id": completed_user_id,
+        "data": updated_queue.model_dump(mode="json"),
+    }
+    await manager.broadcast(subject, event_advance)
+    await manager.broadcast_all(event_advance)
 
     await manager.send_to_user(
         completed_user_id,
@@ -265,14 +270,13 @@ async def pause_queue(
     queue_service = QueueService(db, r)
     meta = await queue_service.pause_queue(subject, data.curator_tg_id, data.paused)
 
-    await manager.broadcast(
-        subject,
-        {
-            "event": "queue_paused" if data.paused else "queue_resumed",
-            "subject": subject,
-            "is_paused": data.paused,
-        },
-    )
+    event_payload = {
+        "event": "queue_paused" if data.paused else "queue_resumed",
+        "subject": subject,
+        "is_paused": data.paused,
+    }
+    await manager.broadcast(subject, event_payload)
+    await manager.broadcast_all(event_payload)
 
     return {"status": "paused" if data.paused else "resumed", "data": meta.model_dump(mode="json")}
 
@@ -288,14 +292,13 @@ async def clear_queue(
     queue_service = QueueService(db, r)
     updated_queue = await queue_service.clear_queue(subject, data.curator_tg_id)
 
-    await manager.broadcast(
-        subject,
-        {
-            "event": "queue_cleared",
-            "subject": subject,
-            "data": updated_queue.model_dump(mode="json"),
-        },
-    )
+    event_clear = {
+        "event": "queue_cleared",
+        "subject": subject,
+        "data": updated_queue.model_dump(mode="json"),
+    }
+    await manager.broadcast(subject, event_clear)
+    await manager.broadcast_all(event_clear)
 
     return {"status": "cleared", "data": updated_queue.model_dump(mode="json")}
 
@@ -312,6 +315,7 @@ async def delete_queue(
     await queue_service.delete_queue(subject, curator_tg_id)
 
     await manager.broadcast(subject, {"event": "queue_deleted", "subject": subject})
+    await manager.broadcast_all({"event": "queue_deleted", "subject": subject})
 
     return {"status": "deleted"}
 
@@ -328,8 +332,8 @@ async def swap_in_queue(
     await queue_service.swap(user_data.position1, user_data.position2, subject)
 
     queue_data = await queue_service.get_queue(subject)
-    await manager.broadcast(
-        subject, {"event": "queue_updated", "data": queue_data.model_dump(mode="json")}
-    )
+    event_data = {"event": "queue_updated", "subject": subject, "data": queue_data.model_dump(mode="json")}
+    await manager.broadcast(subject, event_data)
+    await manager.broadcast_all(event_data)
 
     return {"status": "swapped"}

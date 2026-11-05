@@ -81,7 +81,7 @@ class SwapRequestRepository:
             data = await self.get(rid)
             if data and data.get("status") == "pending":
                 requests.append(data)
-            elif not data:
+            else:
                 await self.r.srem(incoming_key, rid)
         return requests
 
@@ -93,8 +93,44 @@ class SwapRequestRepository:
             data = await self.get(rid)
             if data and data.get("status") == "pending":
                 requests.append(data)
-            elif not data:
+            else:
                 await self.r.srem(outgoing_key, rid)
+        return requests
+
+    async def get_all_incoming_requests(self, tg_id: int) -> list[dict]:
+        keys = []
+        async for key in self.r.scan_iter(match=f"swap_incoming:*:{tg_id}"):
+            keys.append(key)
+        request_ids = set()
+        for k in keys:
+            members = await self.r.smembers(k)
+            request_ids.update(members)
+        requests = []
+        for rid in request_ids:
+            data = await self.get(rid)
+            if data and data.get("status") == "pending":
+                requests.append(data)
+            else:
+                for k in keys:
+                    await self.r.srem(k, rid)
+        return requests
+
+    async def get_all_outgoing_requests(self, tg_id: int) -> list[dict]:
+        keys = []
+        async for key in self.r.scan_iter(match=f"swap_outgoing:*:{tg_id}"):
+            keys.append(key)
+        request_ids = set()
+        for k in keys:
+            members = await self.r.smembers(k)
+            request_ids.update(members)
+        requests = []
+        for rid in request_ids:
+            data = await self.get(rid)
+            if data and data.get("status") == "pending":
+                requests.append(data)
+            else:
+                for k in keys:
+                    await self.r.srem(k, rid)
         return requests
 
     async def has_pending_outgoing(self, subject: str, from_tg_id: int) -> bool:
@@ -121,11 +157,19 @@ class SwapRequestRepository:
         if response_message:
             await self.r.hset(key, "response_message", response_message)
 
-        # If resolved, remove from active queue index
+        # If resolved, remove from all active indices
         if status != "pending":
             data = await self.get(request_id)
-            if data and "subject" in data:
-                await self.r.srem(self._queue_requests_key(data["subject"]), request_id)
+            if data:
+                subject = data.get("subject")
+                to_tg_id = data.get("to_tg_id")
+                from_tg_id = data.get("from_tg_id")
+                if subject:
+                    await self.r.srem(self._queue_requests_key(subject), request_id)
+                    if to_tg_id:
+                        await self.r.srem(self._incoming_key(subject, int(to_tg_id)), request_id)
+                    if from_tg_id:
+                        await self.r.srem(self._outgoing_key(subject, int(from_tg_id)), request_id)
 
     async def delete(self, request_id: str) -> None:
         data = await self.get(request_id)

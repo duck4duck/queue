@@ -70,5 +70,24 @@ class WSManager:
         if tg_id in self.user_connections and not self.user_connections[tg_id]:
             del self.user_connections[tg_id]
 
+    async def broadcast_all(self, data: dict):
+        """Broadcast an event to all connected users across the application."""
+        dead_users = []
+        for tg_id, sockets in list(self.user_connections.items()):
+            dead = []
+            for ws in sockets:
+                try:
+                    await ws.send_json(data)
+                except Exception:
+                    dead.append(ws)
+            for ws in dead:
+                if ws in sockets:
+                    sockets.remove(ws)
+            if not sockets:
+                dead_users.append(tg_id)
+        for tg_id in dead_users:
+            if tg_id in self.user_connections and not self.user_connections[tg_id]:
+                del self.user_connections[tg_id]
+
 
 manager = WSManager()

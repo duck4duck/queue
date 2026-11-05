@@ -40,12 +40,13 @@ async def create_swap_request(
     )
 
     # Personal push notification to recipient
+    note = f' "{data.message}"' if data.message else ''
     await manager.send_to_user(
         result.to_tg_id,
         {
             "event": "incoming_swap_request",
             "data": result_json,
-            "message": f"{result.from_name or 'Пользователь'} предлагает вам поменяться местами (место {result.from_position} ↔ {result.to_position}). Сообщение: {data.message}",
+            "message": f"{result.from_name or 'Пользователь'} предлагает обмен (место {result.from_position} ↔ {result.to_position}){note}",
         },
     )
 
@@ -59,8 +60,10 @@ async def get_incoming_swap_requests(
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
-    """Get all pending swap requests received by this user in this queue."""
+    """Get all pending swap requests received by this user in this queue (or all queues if subject=='all')."""
     service = SwapRequestService(db, r)
+    if subject == "all":
+        return await service.get_all_incoming_requests(tg_id)
     return await service.get_incoming_requests(subject, tg_id)
 
 
@@ -71,8 +74,10 @@ async def get_outgoing_swap_requests(
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
-    """Get all pending swap requests sent by this user in this queue."""
+    """Get all pending swap requests sent by this user in this queue (or all queues if subject=='all')."""
     service = SwapRequestService(db, r)
+    if subject == "all":
+        return await service.get_all_outgoing_requests(tg_id)
     return await service.get_outgoing_requests(subject, tg_id)
 
 
@@ -100,15 +105,15 @@ async def accept_swap_request(
     result_json = result.model_dump(mode="json")
     queue_json = queue_data.model_dump(mode="json")
 
-    # Broadcast queue update to room
-    await manager.broadcast(
-        result.subject,
-        {
-            "event": "swap_request_accepted",
-            "swap": result_json,
-            "data": queue_json,
-        },
-    )
+    # Broadcast queue update to room and all users
+    event_swap = {
+        "event": "swap_request_accepted",
+        "subject": result.subject,
+        "swap": result_json,
+        "data": queue_json,
+    }
+    await manager.broadcast(result.subject, event_swap)
+    await manager.broadcast_all(event_swap)
 
     # Personal push notification to sender that their swap was accepted!
     await manager.send_to_user(
@@ -116,7 +121,7 @@ async def accept_swap_request(
         {
             "event": "swap_accepted",
             "data": result_json,
-            "message": f"{result.to_name or 'Пользователь'} принял ваш запрос на обмен! Ответ: {data.message}",
+            "message": f"{result.to_name or 'Пользователь'} принял ваш запрос на обмен!",
         },
     )
 
@@ -156,7 +161,7 @@ async def reject_swap_request(
         {
             "event": "swap_rejected",
             "data": result_json,
-            "message": f"{result.to_name or 'Пользователь'} отклонил ваш запрос на обмен. Причина: {data.message}",
+            "message": f"{result.to_name or 'Пользователь'} отклонил ваш запрос на обмен",
         },
     )
 

@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.subject_repository import SubjectRepository
-from typing import List
+from typing import List, Optional
 from app.schemas.subject import SubjectResponse, Subject, ListOfSubjects
 from app.schemas.exception import SubjectNotFound, SubjectAlreadyExists
 
