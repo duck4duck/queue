@@ -42,7 +42,9 @@ class QueueRepository:
             return False
 
         if is_new:
-            await self.r.expire(key, TWO_WEEKS_SECONDS)
+            meta_ttl = await self.r.ttl(self._meta_key(subject))
+            ttl = meta_ttl if (meta_ttl and meta_ttl > 0) else TWO_WEEKS_SECONDS
+            await self.r.expire(key, ttl)
 
         return True
 
@@ -129,22 +131,50 @@ class QueueRepository:
         subject_name: str,
         queue_type: str,
         created_by_tg_id: int,
+        auto_delete_at: str | None = None,
+        ttl_seconds: int | None = None,
     ) -> None:
         key = self._meta_key(subject)
         now = datetime.now(timezone.utc).isoformat()
-        await self.r.hset(
-            key,
-            mapping={
-                "subject": subject,
-                "subject_name": subject_name,
-                "queue_type": queue_type,
-                "created_by_tg_id": str(created_by_tg_id),
-                "created_at": now,
-                "is_paused": "false",
-            },
-        )
-        await self.r.expire(key, TWO_WEEKS_SECONDS)
+        ttl = ttl_seconds if (ttl_seconds is not None and ttl_seconds > 0) else TWO_WEEKS_SECONDS
+        mapping = {
+            "subject": subject,
+            "subject_name": subject_name,
+            "queue_type": queue_type,
+            "created_by_tg_id": str(created_by_tg_id),
+            "created_at": now,
+            "is_paused": "false",
+        }
+        if auto_delete_at:
+            mapping["auto_delete_at"] = auto_delete_at
+        await self.r.hset(key, mapping=mapping)
+        await self.r.expire(key, ttl)
         await self.r.sadd("active_queues", subject)
+
+    async def update_auto_delete(
+        self,
+        subject: str,
+        auto_delete_at: str | None,
+        ttl_seconds: int | None = None,
+    ) -> None:
+        key = self._meta_key(subject)
+        queue_key = self._queue_key(subject)
+        history_key = self._history_key(subject)
+        if auto_delete_at:
+            await self.r.hset(key, "auto_delete_at", auto_delete_at)
+            ttl = ttl_seconds if (ttl_seconds is not None and ttl_seconds > 0) else TWO_WEEKS_SECONDS
+            await self.r.expire(key, ttl)
+            if await self.r.exists(queue_key):
+                await self.r.expire(queue_key, ttl)
+            if await self.r.exists(history_key):
+                await self.r.expire(history_key, ttl)
+        else:
+            await self.r.hdel(key, "auto_delete_at")
+            await self.r.expire(key, TWO_WEEKS_SECONDS)
+            if await self.r.exists(queue_key):
+                await self.r.expire(queue_key, TWO_WEEKS_SECONDS)
+            if await self.r.exists(history_key):
+                await self.r.expire(history_key, TWO_WEEKS_SECONDS)
 
     async def get_queue_meta(self, subject: str) -> dict | None:
         key = self._meta_key(subject)
@@ -173,6 +203,42 @@ class QueueRepository:
             else:
                 await self.r.srem("active_queues", subject)
         return active
+
+    async def cleanup_expired_queues(self) -> list[str]:
+        """Checks all active queues for expiration, deletes expired ones, and returns their keys."""
+        members = await self.r.smembers("active_queues")
+        deleted = []
+        now = datetime.now(timezone.utc)
+        for subject in members:
+            has_queue = await self.r.exists(self._queue_key(subject))
+            has_meta = await self.r.exists(self._meta_key(subject))
+            if not has_queue and not has_meta:
+                await self.r.srem("active_queues", subject)
+                deleted.append(subject)
+                continue
+
+            meta = await self.get_queue_meta(subject)
+            if not meta:
+                await self.clear(subject)
+                deleted.append(subject)
+                continue
+
+            auto_delete_at = meta.get("auto_delete_at")
+            if auto_delete_at:
+                try:
+                    exp_dt = datetime.fromisoformat(auto_delete_at.replace("Z", "+00:00"))
+                    if exp_dt.tzinfo is None:
+                        exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                    if now >= exp_dt:
+                        # Clean up user queues index for remaining users
+                        queue = await self.get_queue(subject)
+                        for uid in queue.values():
+                            await self.remove_user_from_index(uid, subject)
+                        await self.clear(subject)
+                        deleted.append(subject)
+                except Exception as e:
+                    logger.warning(f"Error checking expiration for {subject}: {e}")
+        return deleted
 
     # ──────────────────── User Participation Index ────────────────────
 
@@ -205,7 +271,9 @@ class QueueRepository:
 
         await self.r.lpush(key, entry)
         await self.r.ltrim(key, 0, MAX_HISTORY_ITEMS - 1)
-        await self.r.expire(key, TWO_WEEKS_SECONDS)
+        meta_ttl = await self.r.ttl(self._meta_key(subject))
+        ttl = meta_ttl if (meta_ttl and meta_ttl > 0) else TWO_WEEKS_SECONDS
+        await self.r.expire(key, ttl)
 
     async def get_history(self, subject: str, limit: int = 20) -> list[dict]:
         """Fetch latest activity log entries for the queue."""

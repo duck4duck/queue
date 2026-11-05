@@ -14,6 +14,7 @@ from app.schemas.dto import (
     AdvanceQueueDto,
     PauseQueueDto,
     ClearQueueDto,
+    UpdateAutoDeleteDto,
 )
 from app.schemas.queue import (
     MyPositionResponse,
@@ -36,6 +37,7 @@ async def create_queue(
         subject_name=data.subject_name,
         queue_type=data.queue_type,
         created_by_tg_id=data.created_by_tg_id,
+        auto_delete_at=data.auto_delete_at,
     )
     meta_json = meta.model_dump(mode="json")
     await manager.broadcast_all({
@@ -279,6 +281,29 @@ async def pause_queue(
     await manager.broadcast_all(event_payload)
 
     return {"status": "paused" if data.paused else "resumed", "data": meta.model_dump(mode="json")}
+
+
+@router.post("/{subject}/auto-delete")
+async def update_auto_delete(
+    subject: str,
+    data: UpdateAutoDeleteDto,
+    db: AsyncSession = Depends(get_db),
+    r: Redis = Depends(get_redis),
+):
+    """Curator/Creator updates or clears auto-deletion expiration time."""
+    queue_service = QueueService(db, r)
+    meta = await queue_service.update_auto_delete(subject, data.curator_tg_id, data.auto_delete_at)
+
+    meta_json = meta.model_dump(mode="json")
+    event_payload = {
+        "event": "queue_updated",
+        "subject": subject,
+        "data": meta_json,
+    }
+    await manager.broadcast(subject, event_payload)
+    await manager.broadcast_all(event_payload)
+
+    return {"status": "updated", "data": meta_json}
 
 
 @router.post("/{subject}/clear")

@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from app.repositories.queue_repository import QueueRepository
 from app.repositories.swap_request_repository import SwapRequestRepository
 from app.repositories.subject_repository import SubjectRepository
@@ -44,9 +45,13 @@ class QueueService:
     # ──────────────────── Queue Lifecycle ────────────────────
 
     async def create_queue(
-        self, subject_name: str, queue_type: str, created_by_tg_id: int
+        self,
+        subject_name: str,
+        queue_type: str,
+        created_by_tg_id: int,
+        auto_delete_at: str | None = None,
     ) -> QueueMetaInfo:
-        """Create a new named queue for a subject (e.g. 'Math:Lab 1')."""
+        """Create a new named queue for a subject (e.g. 'Math:Lab 1') with optional auto-deletion time."""
         creator = await self.user_service.get_user_by_tg_id(created_by_tg_id)
         if creator is None:
             raise UserNotFound("Пользователь не найден!")
@@ -62,11 +67,28 @@ class QueueService:
         if await self.r.meta_exists(subject_key):
             raise QueueAlreadyExists(f"Очередь '{subject_key}' уже создана!")
 
+        ttl_seconds = None
+        if auto_delete_at:
+            try:
+                exp_dt = datetime.fromisoformat(auto_delete_at.replace("Z", "+00:00"))
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                diff = int((exp_dt - datetime.now(timezone.utc)).total_seconds())
+                if diff > 0:
+                    ttl_seconds = diff
+                else:
+                    ttl_seconds = 30
+            except Exception as e:
+                logger.warning(f"Invalid auto_delete_at format '{auto_delete_at}': {e}")
+                auto_delete_at = None
+
         await self.r.create_queue_meta(
             subject=subject_key,
             subject_name=subject_name,
             queue_type=queue_type,
             created_by_tg_id=created_by_tg_id,
+            auto_delete_at=auto_delete_at,
+            ttl_seconds=ttl_seconds,
         )
 
         await self.r.log_event(
@@ -74,7 +96,10 @@ class QueueService:
             "create",
             f"Очередь создана пользователем {creator.name}",
         )
-        logger.info(f"Queue created: '{subject_key}' by {creator.name} (tg_id={created_by_tg_id})")
+        logger.info(
+            f"Queue created: '{subject_key}' by {creator.name} (tg_id={created_by_tg_id}), "
+            f"auto_delete_at={auto_delete_at}"
+        )
 
         meta = await self.r.get_queue_meta(subject_key)
         return QueueMetaInfo(
@@ -83,7 +108,8 @@ class QueueService:
             queue_type=queue_type,
             created_by_tg_id=created_by_tg_id,
             created_by_name=creator.name,
-            created_at=meta["created_at"],
+            created_at=meta["created_at"] if meta else datetime.now(timezone.utc).isoformat(),
+            auto_delete_at=meta.get("auto_delete_at") if meta else None,
             taken_positions=0,
             total_positions=self.max_positions,
             is_paused=False,
@@ -104,6 +130,12 @@ class QueueService:
     async def delete_queue(self, subject: str, creator_tg_id: int) -> None:
         """Only the creator can delete the entire queue."""
         meta, user = await self._check_creator(subject, creator_tg_id)
+
+        queue = await self.r.get_queue(subject)
+        for uid in queue.values():
+            await self.swap_repo.cancel_all_for_user_in_queue(subject, uid)
+            await self.r.remove_user_from_index(uid, subject)
+
         await self.r.clear(subject)
         logger.info(f"Queue deleted: '{subject}' by creator {user.name} (tg_id={creator_tg_id})")
 
@@ -143,11 +175,60 @@ class QueueService:
             queue_type=meta.get("queue_type", "") if meta else "",
             created_by_tg_id=int(meta.get("created_by_tg_id", 0)) if meta else 0,
             created_at=meta.get("created_at", "") if meta else "",
+            auto_delete_at=meta.get("auto_delete_at") if meta else None,
             taken_positions=taken,
             total_positions=self.max_positions,
             is_paused=paused,
             my_position=my_pos,
         )
+
+    async def update_auto_delete(
+        self, subject: str, creator_tg_id: int, auto_delete_at: str | None
+    ) -> QueueMetaInfo:
+        """Only the creator can change or clear the queue's auto-deletion time."""
+        meta, user = await self._check_creator(subject, creator_tg_id)
+
+        ttl_seconds = None
+        if auto_delete_at:
+            try:
+                exp_dt = datetime.fromisoformat(auto_delete_at.replace("Z", "+00:00"))
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                diff = int((exp_dt - datetime.now(timezone.utc)).total_seconds())
+                if diff > 0:
+                    ttl_seconds = diff
+                else:
+                    ttl_seconds = 30
+            except Exception:
+                auto_delete_at = None
+
+        await self.r.update_auto_delete(subject, auto_delete_at, ttl_seconds)
+
+        event_text = (
+            f"Автоудаление очереди установлено на {auto_delete_at}"
+            if auto_delete_at
+            else "Автоудаление очереди отключено"
+        )
+        await self.r.log_event(subject, "update_auto_delete", f"{event_text} создателем {user.name}")
+        logger.info(f"Queue '{subject}' auto_delete_at updated to {auto_delete_at} by creator {user.name}")
+
+        meta = await self.r.get_queue_meta(subject)
+        taken = await self.r.size(subject)
+        my_pos = await self.r.get_position(subject, creator_tg_id)
+
+        return QueueMetaInfo(
+            subject=subject,
+            subject_name=meta.get("subject_name", subject) if meta else subject,
+            queue_type=meta.get("queue_type", "") if meta else "",
+            created_by_tg_id=int(meta.get("created_by_tg_id", 0)) if meta else 0,
+            created_at=meta.get("created_at", "") if meta else "",
+            auto_delete_at=meta.get("auto_delete_at") if meta else None,
+            taken_positions=taken,
+            total_positions=self.max_positions,
+            is_paused=meta.get("is_paused") == "true" if meta else False,
+            my_position=my_pos,
+        )
+
 
     async def list_queues(
         self,
@@ -158,10 +239,23 @@ class QueueService:
         """List active queues with optional filtering and search."""
         keys = await self.r.get_all_active_queue_keys()
         queues = []
+        now = datetime.now(timezone.utc)
         for subject in keys:
             meta = await self.r.get_queue_meta(subject)
             if meta is None:
                 continue
+
+            auto_del = meta.get("auto_delete_at")
+            if auto_del:
+                try:
+                    exp_dt = datetime.fromisoformat(auto_del.replace("Z", "+00:00"))
+                    if exp_dt.tzinfo is None:
+                        exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                    if now >= exp_dt:
+                        await self.r.clear(subject)
+                        continue
+                except Exception:
+                    pass
 
             subj_name = meta.get("subject_name", "")
             q_type = meta.get("queue_type", "")
@@ -189,6 +283,7 @@ class QueueService:
                     created_by_tg_id=created_by_tg_id,
                     created_by_name=creator.name if creator else None,
                     created_at=meta.get("created_at", ""),
+                    auto_delete_at=auto_del,
                     taken_positions=taken,
                     total_positions=self.max_positions,
                     is_paused=paused,
@@ -233,14 +328,14 @@ class QueueService:
             raise UserNotFound("Пользователь не найден!")
 
         if not await self.r.is_user_in_queue(subject, user_id):
-            raise UserNotInQueue("Пользователь не состоит в очереди!")
+            raise UserNotInQueue("Вы не состоите в этой очереди!")
 
         await self.swap_repo.cancel_all_for_user_in_queue(subject, user_id)
         freed_pos = await self.r.remove_by_user(subject, user_id)
         await self.r.remove_user_from_index(user_id, subject)
 
         await self.r.log_event(subject, "leave", f"{user.name} освободил(а) место #{freed_pos}")
-        logger.info(f"User {user.name} (tg_id={user_id}) left '{subject}' (freed #{freed_pos})")
+        logger.info(f"User {user.name} (tg_id={user_id}) left '{subject}' (was pos #{freed_pos})")
 
         return await self.get_queue(subject)
 
@@ -292,7 +387,7 @@ class QueueService:
             "advance",
             f"Сдача завершена: {user_name} сдал(а) работу! Очередь сдвинута.",
         )
-        logger.info(f"Queue '{subject}' advanced: {user_name} (tg_id={user_id}) completed by curator {curator.name}")
+        logger.info(f"Queue '{subject}' advanced: {user_name} (tg_id={user_id}) completed by creator {user.name}")
 
         updated_queue = await self.get_queue(subject)
         return user_id, updated_queue
@@ -300,6 +395,20 @@ class QueueService:
     # ──────────────────── Queue State Inspection ────────────────────
 
     async def get_queue(self, subject: str) -> QueueResponse:
+        meta = await self.r.get_queue_meta(subject)
+        if meta and meta.get("auto_delete_at"):
+            try:
+                exp_dt = datetime.fromisoformat(meta["auto_delete_at"].replace("Z", "+00:00"))
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) >= exp_dt:
+                    await self.r.clear(subject)
+                    raise QueueNotFound("Очередь была автоматически удалена по истечении срока действия!")
+            except QueueNotFound:
+                raise
+            except Exception:
+                pass
+
         queue = await self.r.get_queue(subject)
         is_paused = await self.r.is_queue_paused(subject)
 
@@ -351,8 +460,24 @@ class QueueService:
     async def get_user_queues(self, tg_id: int) -> list[QueueMetaInfo]:
         subjects = await self.r.get_user_queues(tg_id)
         result = []
+        now = datetime.now(timezone.utc)
         for subject in subjects:
             meta = await self.r.get_queue_meta(subject)
+            if not meta:
+                continue
+
+            auto_del = meta.get("auto_delete_at")
+            if auto_del:
+                try:
+                    exp_dt = datetime.fromisoformat(auto_del.replace("Z", "+00:00"))
+                    if exp_dt.tzinfo is None:
+                        exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                    if now >= exp_dt:
+                        await self.r.clear(subject)
+                        continue
+                except Exception:
+                    pass
+
             taken = await self.r.size(subject)
             is_paused = (meta.get("is_paused") == "true") if meta else False
             my_pos = await self.r.get_position(subject, tg_id)
@@ -363,6 +488,7 @@ class QueueService:
                     queue_type=meta.get("queue_type", "") if meta else "",
                     created_by_tg_id=int(meta.get("created_by_tg_id", 0)) if meta else 0,
                     created_at=meta.get("created_at", "") if meta else "",
+                    auto_delete_at=auto_del,
                     taken_positions=taken,
                     total_positions=self.max_positions,
                     is_paused=is_paused,

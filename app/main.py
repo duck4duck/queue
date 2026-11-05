@@ -1,3 +1,4 @@
+import asyncio
 import time
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -9,6 +10,8 @@ from app.core.config import settings
 from app.core.logger import logger, setup_logger
 from app.db.redis.redis_client import close_redis, get_redis_client
 from app.db.postgres.database import engine, AsyncSessionLocal
+from app.repositories.queue_repository import QueueRepository
+from app.api.ws_manager import manager
 from app.api.router import main_router
 from app.schemas.exception import (
     UserNotFound,
@@ -52,14 +55,38 @@ from app.api.v1.exception_handler import (
 )
 
 
+async def queue_expiration_loop():
+    """Background task checking and removing expired queues every 15 seconds."""
+    while True:
+        try:
+            await asyncio.sleep(15)
+            r = get_redis_client()
+            repo = QueueRepository(r)
+            deleted_subjects = await repo.cleanup_expired_queues()
+            for subject in deleted_subjects:
+                logger.info(f"Auto-deleted expired queue: {subject}")
+                await manager.broadcast(subject, {"event": "queue_deleted", "subject": subject})
+                await manager.broadcast_all({"event": "queue_deleted", "subject": subject})
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.error(f"Error in queue_expiration_loop: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     setup_logger(settings.log_level)
     logger.info(f"Starting {settings.app_name} v{settings.app_version}...")
+    cleanup_task = asyncio.create_task(queue_expiration_loop())
     yield
     # Shutdown
     logger.info("Shutting down application...")
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     await close_redis()
     await engine.dispose()
     logger.info("Application successfully stopped.")

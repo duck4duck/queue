@@ -35,6 +35,7 @@ class QueueCreateDto(BaseModel):
     subject_name: str
     queue_type: str
     created_by_tg_id: int
+    auto_delete_at: str | None = None
 
 
 class AdvanceQueueDto(BaseModel):
@@ -56,3 +57,10 @@ class ClearQueueDto(BaseModel):
 class SetRoleDto(BaseModel):
     """Assign a role to a user ('student' or 'curator')."""
     role: str
+
+
+class UpdateAutoDeleteDto(BaseModel):
+    """Curator/Creator updates or clears auto-deletion expiration time."""
+    curator_tg_id: int
+    auto_delete_at: str | None = None
+

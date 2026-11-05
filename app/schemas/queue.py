@@ -31,6 +31,7 @@ class QueueMetaInfo(BaseModel):
     created_by_tg_id: int
     created_by_name: str | None = None
     created_at: str
+    auto_delete_at: str | None = None
     taken_positions: int = 0
     total_positions: int = 30
     is_paused: bool = False
