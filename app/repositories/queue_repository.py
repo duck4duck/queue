@@ -2,6 +2,7 @@ import json
 from datetime import datetime, timezone
 from redis.asyncio import Redis
 from app.core.config import settings
+from app.core.datetime_utils import parse_utc_datetime
 from app.core.logger import logger
 
 TWO_WEEKS_SECONDS = settings.queue_ttl_days * 24 * 60 * 60
@@ -36,7 +37,6 @@ class QueueRepository:
         key = self._queue_key(subject)
         is_new = not await self.r.exists(key)
 
-        # Atomic set if not exists
         acquired = await self.r.hsetnx(key, str(position), str(user_id))
         if not acquired:
             return False
@@ -67,10 +67,7 @@ class QueueRepository:
     async def is_user_in_queue(self, subject: str, user_id: int) -> bool:
         key = self._queue_key(subject)
         users = await self.r.hgetall(key)
-        for position, uid in users.items():
-            if str(user_id) == uid:
-                return True
-        return False
+        return str(user_id) in users.values()
 
     async def get_position(self, subject: str, user_id: int) -> int | None:
         key = self._queue_key(subject)
@@ -82,9 +79,7 @@ class QueueRepository:
 
     async def get_user_at_position(self, subject: str, position: int) -> int | None:
         uid = await self.r.hget(self._queue_key(subject), str(position))
-        if uid is not None:
-            return int(uid)
-        return None
+        return int(uid) if uid is not None else None
 
     async def get_first_in_line(self, subject: str) -> tuple[int, int] | None:
         """Returns (position, user_id) of the lowest occupied slot."""
@@ -115,10 +110,12 @@ class QueueRepository:
         await self.r.delete(self._queue_key(subject))
 
     async def clear(self, subject: str) -> None:
-        await self.r.delete(self._queue_key(subject))
-        await self.r.delete(self._meta_key(subject))
-        await self.r.delete(self._history_key(subject))
-        await self.r.srem("active_queues", subject)
+        pipe = self.r.pipeline(transaction=True)
+        pipe.delete(self._queue_key(subject))
+        pipe.delete(self._meta_key(subject))
+        pipe.delete(self._history_key(subject))
+        pipe.srem("active_queues", subject)
+        await pipe.execute()
 
     async def size(self, subject: str) -> int:
         return await self.r.hlen(self._queue_key(subject))
@@ -147,9 +144,12 @@ class QueueRepository:
         }
         if auto_delete_at:
             mapping["auto_delete_at"] = auto_delete_at
-        await self.r.hset(key, mapping=mapping)
-        await self.r.expire(key, ttl)
-        await self.r.sadd("active_queues", subject)
+
+        pipe = self.r.pipeline(transaction=True)
+        pipe.hset(key, mapping=mapping)
+        pipe.expire(key, ttl)
+        pipe.sadd("active_queues", subject)
+        await pipe.execute()
 
     async def update_auto_delete(
         self,
@@ -160,28 +160,27 @@ class QueueRepository:
         key = self._meta_key(subject)
         queue_key = self._queue_key(subject)
         history_key = self._history_key(subject)
+        ttl = (
+            ttl_seconds
+            if (ttl_seconds is not None and ttl_seconds > 0)
+            else TWO_WEEKS_SECONDS
+        )
+
+        pipe = self.r.pipeline(transaction=True)
         if auto_delete_at:
-            await self.r.hset(key, "auto_delete_at", auto_delete_at)
-            ttl = ttl_seconds if (ttl_seconds is not None and ttl_seconds > 0) else TWO_WEEKS_SECONDS
-            await self.r.expire(key, ttl)
-            if await self.r.exists(queue_key):
-                await self.r.expire(queue_key, ttl)
-            if await self.r.exists(history_key):
-                await self.r.expire(history_key, ttl)
+            pipe.hset(key, "auto_delete_at", auto_delete_at)
         else:
-            await self.r.hdel(key, "auto_delete_at")
-            await self.r.expire(key, TWO_WEEKS_SECONDS)
-            if await self.r.exists(queue_key):
-                await self.r.expire(queue_key, TWO_WEEKS_SECONDS)
-            if await self.r.exists(history_key):
-                await self.r.expire(history_key, TWO_WEEKS_SECONDS)
+            pipe.hdel(key, "auto_delete_at")
+
+        pipe.expire(key, ttl)
+        pipe.expire(queue_key, ttl)
+        pipe.expire(history_key, ttl)
+        await pipe.execute()
 
     async def get_queue_meta(self, subject: str) -> dict | None:
         key = self._meta_key(subject)
         data = await self.r.hgetall(key)
-        if not data:
-            return None
-        return data
+        return data if data else None
 
     async def set_queue_pause(self, subject: str, paused: bool) -> None:
         key = self._meta_key(subject)
@@ -193,6 +192,7 @@ class QueueRepository:
         return val == "true"
 
     async def get_all_active_queue_keys(self) -> list[str]:
+        # smembers returns a snapshot, so safe to prune dead entries
         members = await self.r.smembers("active_queues")
         active = []
         for subject in members:
@@ -225,19 +225,13 @@ class QueueRepository:
 
             auto_delete_at = meta.get("auto_delete_at")
             if auto_delete_at:
-                try:
-                    exp_dt = datetime.fromisoformat(auto_delete_at.replace("Z", "+00:00"))
-                    if exp_dt.tzinfo is None:
-                        exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-                    if now >= exp_dt:
-                        # Clean up user queues index for remaining users
-                        queue = await self.get_queue(subject)
-                        for uid in queue.values():
-                            await self.remove_user_from_index(uid, subject)
-                        await self.clear(subject)
-                        deleted.append(subject)
-                except Exception as e:
-                    logger.warning(f"Error checking expiration for {subject}: {e}")
+                exp_dt = parse_utc_datetime(auto_delete_at)
+                if exp_dt and now >= exp_dt:
+                    queue = await self.get_queue(subject)
+                    for uid in queue.values():
+                        await self.remove_user_from_index(uid, subject)
+                    await self.clear(subject)
+                    deleted.append(subject)
         return deleted
 
     # ──────────────────── User Participation Index ────────────────────
@@ -269,11 +263,13 @@ class QueueRepository:
             "text": text,
         }, ensure_ascii=False)
 
-        await self.r.lpush(key, entry)
-        await self.r.ltrim(key, 0, MAX_HISTORY_ITEMS - 1)
+        pipe = self.r.pipeline(transaction=True)
+        pipe.lpush(key, entry)
+        pipe.ltrim(key, 0, MAX_HISTORY_ITEMS - 1)
         meta_ttl = await self.r.ttl(self._meta_key(subject))
         ttl = meta_ttl if (meta_ttl and meta_ttl > 0) else TWO_WEEKS_SECONDS
-        await self.r.expire(key, ttl)
+        pipe.expire(key, ttl)
+        await pipe.execute()
 
     async def get_history(self, subject: str, limit: int = 20) -> list[dict]:
         """Fetch latest activity log entries for the queue."""

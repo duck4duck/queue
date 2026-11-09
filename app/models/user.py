@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy import String, BigInteger
+from sqlalchemy import String, BigInteger, text
 
 from app.models.base import Base
 
@@ -10,4 +10,4 @@ class User(Base):
     name: Mapped[str] = mapped_column(String)
     tg_id: Mapped[int] = mapped_column(BigInteger, unique=True)
     photo_url: Mapped[str | None] = mapped_column(String, nullable=True)
-    role: Mapped[str] = mapped_column(String, default="student", server_default="student")
+    role: Mapped[str] = mapped_column(String, default="student", server_default=text("'student'"))

@@ -1,13 +1,11 @@
 import logging
 import sys
-from typing import Any
 
 
 class ColoredFormatter(logging.Formatter):
     """Console formatter with ANSI color coding for different log levels."""
 
     GREY = "\x1b[38;20m"
-    BLUE = "\x1b[34;20m"
     GREEN = "\x1b[32;20m"
     YELLOW = "\x1b[33;20m"
     RED = "\x1b[31;20m"
@@ -24,17 +22,19 @@ class ColoredFormatter(logging.Formatter):
         logging.CRITICAL: BOLD_RED + FORMAT + RESET,
     }
 
+    _formatters: dict[int, logging.Formatter] = {}
+
     def format(self, record: logging.LogRecord) -> str:
-        log_fmt = self.FORMATS.get(record.levelno, self.FORMAT)
-        formatter = logging.Formatter(log_fmt, datefmt="%Y-%m-%d %H:%M:%S")
-        return formatter.format(record)
+        if record.levelno not in self._formatters:
+            log_fmt = self.FORMATS.get(record.levelno, self.FORMAT)
+            self._formatters[record.levelno] = logging.Formatter(log_fmt, datefmt="%Y-%m-%d %H:%M:%S")
+        return self._formatters[record.levelno].format(record)
 
 
 def setup_logger(log_level: str = "INFO") -> logging.Logger:
     """Configure root and application loggers."""
     level = getattr(logging, log_level.upper(), logging.INFO)
 
-    # Root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(level)
 
@@ -44,6 +44,9 @@ def setup_logger(log_level: str = "INFO") -> logging.Logger:
         console_handler.setLevel(level)
         console_handler.setFormatter(ColoredFormatter())
         root_logger.addHandler(console_handler)
+    else:
+        for handler in root_logger.handlers:
+            handler.setLevel(level)
 
     # Suppress overly noisy loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -53,5 +56,5 @@ def setup_logger(log_level: str = "INFO") -> logging.Logger:
     return app_logger
 
 
-# Default logger instance
+# Default logger instance (level updated in lifespan via setup_logger)
 logger = setup_logger()

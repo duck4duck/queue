@@ -1,82 +1,104 @@
-version: '3.8'
-
 services:
   db:
     image: postgres:15-alpine
-    container_name: postgres_db_local
-    restart: always
+    container_name: postgres_db
+    restart: unless-stopped
     env_file:
       - .env
     environment:
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER:-myapp_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-strong_password}
+      POSTGRES_DB: ${DB_NAME:-myapp_db}
     ports:
-      - '${DB_PORT:-5432}:5432'
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER} -d ${DB_NAME}']
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-myapp_user} -d ${DB_NAME:-myapp_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   redis:
     image: redis:7-alpine
-    container_name: redis_local
-    restart: always
+    container_name: redis_cache
+    restart: unless-stopped
     ports:
-      - '${REDIS_PORT:-6379}:6379'
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_secret}
+    environment:
+      - REDISCLI_AUTH=${REDIS_PASSWORD:-1111}
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-1111}
     healthcheck:
-      test:
-        ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD:-redis_secret}', 'ping']
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: queue_app
-    restart: always
+    restart: unless-stopped
     env_file:
       - .env
     environment:
       DB_HOST: db
       REDIS_HOST: redis
     ports:
-      - '8000:8000'
+      - "${APP_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # Development / Debugging GUI tools (only launched with --profile dev)
   pgadmin:
     image: dpage/pgadmin4
     container_name: pgadmin_panel
-    restart: always
+    restart: unless-stopped
+    profiles:
+      - dev
     environment:
-      PGADMIN_DEFAULT_EMAIL: admin@admin.com
-      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
     ports:
-      - '5050:80'
+      - "127.0.0.1:5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
     depends_on:
       - db
 
   redis-insight:
     image: redis/redisinsight:latest
     container_name: redis_insight
-    restart: always
+    restart: unless-stopped
+    profiles:
+      - dev
     ports:
-      - '${REDIS_INSIGHT_PORT:-5540}:5540'
+      - "127.0.0.1:${REDIS_INSIGHT_PORT:-5540}:5540"
     depends_on:
       - redis
 
 volumes:
   postgres_data:
   redis_data:
+  pgadmin_data:

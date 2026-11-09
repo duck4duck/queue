@@ -1,10 +1,12 @@
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
-import uvicorn
 
 from app.core.config import settings
 from app.core.logger import logger, setup_logger
@@ -13,46 +15,8 @@ from app.db.postgres.database import engine, AsyncSessionLocal
 from app.repositories.queue_repository import QueueRepository
 from app.api.ws_manager import manager
 from app.api.router import main_router
-from app.schemas.exception import (
-    UserNotFound,
-    QueueException,
-    UserAlreadyInQueue,
-    UserNotInQueue,
-    PositionEmpty,
-    PositionTaken,
-    InvalidPosition,
-    Forbidden,
-    QueueAlreadyExists,
-    QueueNotFound,
-    QueuePaused,
-    SwapRequestNotFound,
-    SwapRequestAlreadyExists,
-    SwapRequestExpired,
-    SwapRequestException,
-    SubjectNotFound,
-    SubjectAlreadyExists,
-    InvalidRole,
-)
-from app.api.v1.exception_handler import (
-    user_not_found_handler,
-    user_already_in_queue_handler,
-    user_not_in_queue_handler,
-    position_empty_handler,
-    position_taken_handler,
-    invalid_position_handler,
-    forbidden_handler,
-    queue_already_exists_handler,
-    queue_not_found_handler,
-    queue_paused_handler,
-    swap_request_not_found_handler,
-    swap_request_already_exists_handler,
-    swap_request_expired_handler,
-    swap_request_exception_handler,
-    subject_not_found_handler,
-    subject_already_exists_handler,
-    invalid_role_handler,
-    queue_exception_handler,
-)
+from app.schemas.exception import AppException
+from app.api.v1.exception_handler import app_exception_handler
 
 
 async def queue_expiration_loop():
@@ -65,8 +29,9 @@ async def queue_expiration_loop():
             deleted_subjects = await repo.cleanup_expired_queues()
             for subject in deleted_subjects:
                 logger.info(f"Auto-deleted expired queue: {subject}")
-                await manager.broadcast(subject, {"event": "queue_deleted", "subject": subject})
-                await manager.broadcast_all({"event": "queue_deleted", "subject": subject})
+                await manager.broadcast_room_and_all(
+                    subject, {"event": "queue_deleted", "subject": subject}
+                )
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -137,24 +102,7 @@ async def log_requests_middleware(request: Request, call_next):
 app.include_router(main_router)
 
 # ──────────────────── Exception Handlers ────────────────────
-app.add_exception_handler(UserNotFound, user_not_found_handler)
-app.add_exception_handler(UserAlreadyInQueue, user_already_in_queue_handler)
-app.add_exception_handler(UserNotInQueue, user_not_in_queue_handler)
-app.add_exception_handler(PositionEmpty, position_empty_handler)
-app.add_exception_handler(PositionTaken, position_taken_handler)
-app.add_exception_handler(InvalidPosition, invalid_position_handler)
-app.add_exception_handler(Forbidden, forbidden_handler)
-app.add_exception_handler(QueueAlreadyExists, queue_already_exists_handler)
-app.add_exception_handler(QueueNotFound, queue_not_found_handler)
-app.add_exception_handler(QueuePaused, queue_paused_handler)
-app.add_exception_handler(SwapRequestNotFound, swap_request_not_found_handler)
-app.add_exception_handler(SwapRequestAlreadyExists, swap_request_already_exists_handler)
-app.add_exception_handler(SwapRequestExpired, swap_request_expired_handler)
-app.add_exception_handler(SwapRequestException, swap_request_exception_handler)
-app.add_exception_handler(SubjectNotFound, subject_not_found_handler)
-app.add_exception_handler(SubjectAlreadyExists, subject_already_exists_handler)
-app.add_exception_handler(InvalidRole, invalid_role_handler)
-app.add_exception_handler(QueueException, queue_exception_handler)
+app.add_exception_handler(AppException, app_exception_handler)
 
 
 # ──────────────────── Health & Root Endpoints ────────────────────
@@ -170,16 +118,13 @@ def hello():
 
 
 # ──────────────────── Static Frontend for Testing ────────────────────
-import os
-from fastapi.staticfiles import StaticFiles
-
 _frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend"))
 if os.path.exists(_frontend_dir):
     app.mount("/test", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
 
 
 @app.get("/health")
-async def health_check():
+async def health_check(response: Response):
     """Health check endpoint: verifies PostgreSQL and Redis availability."""
     db_status = "ok"
     redis_status = "ok"
@@ -197,6 +142,8 @@ async def health_check():
         redis_status = f"error: {str(e)}"
 
     is_healthy = db_status == "ok" and redis_status == "ok"
+    if not is_healthy:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return {
         "status": "healthy" if is_healthy else "degraded",
         "postgres": db_status,
@@ -206,4 +153,5 @@ async def health_check():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, port=8000, reload=True)
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=settings.debug)

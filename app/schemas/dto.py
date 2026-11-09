@@ -24,6 +24,11 @@ class SwapRequestRespondDto(BaseModel):
     message: str = ""
 
 
+class SwapRequestCancelDto(BaseModel):
+    """Cancel a pending swap request."""
+    tg_id: int
+
+
 class KickDto(BaseModel):
     """Curator kicks a user from the queue."""
     curator_tg_id: int
@@ -63,4 +68,3 @@ class UpdateAutoDeleteDto(BaseModel):
     """Curator/Creator updates or clears auto-deletion expiration time."""
     curator_tg_id: int
     auto_delete_at: str | None = None
-

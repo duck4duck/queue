@@ -5,7 +5,6 @@ from app.db.postgres.database import get_db
 from app.db.redis.redis_client import get_redis
 from app.api.ws_manager import manager
 from app.services.queue_service import QueueService
-from app.core.logger import logger
 from app.schemas.dto import (
     SwapDto,
     UserDto,
@@ -115,7 +114,7 @@ async def get_swap_candidates(
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
-    """Get all users currently ahead of this student in line who are eligible for exchange."""
+    """Get all users currently in line who are eligible for exchange."""
     queue_service = QueueService(db, r)
     return await queue_service.get_swap_candidates(subject, tg_id)
 
@@ -153,12 +152,14 @@ async def join_queue(
 ):
     """Join the queue at a specified free position (1..30)."""
     queue_service = QueueService(db, r)
-    await queue_service.join(subject, user_data.tg_id, user_data.position)
+    queue_data = await queue_service.join(subject, user_data.tg_id, user_data.position)
 
-    queue_data = await queue_service.get_queue(subject)
-    event_data = {"event": "queue_updated", "subject": subject, "data": queue_data.model_dump(mode="json")}
-    await manager.broadcast(subject, event_data)
-    await manager.broadcast_all(event_data)
+    event_data = {
+        "event": "queue_updated",
+        "subject": subject,
+        "data": queue_data.model_dump(mode="json"),
+    }
+    await manager.broadcast_room_and_all(subject, event_data)
 
     return {"status": "joined"}
 
@@ -172,12 +173,14 @@ async def leave_queue(
 ):
     """Leave the queue."""
     queue_service = QueueService(db, r)
-    await queue_service.leave(subject, user_data.tg_id, user_data.position)
+    queue_data = await queue_service.leave(subject, user_data.tg_id, user_data.position)
 
-    queue_data = await queue_service.get_queue(subject)
-    event_data = {"event": "queue_updated", "subject": subject, "data": queue_data.model_dump(mode="json")}
-    await manager.broadcast(subject, event_data)
-    await manager.broadcast_all(event_data)
+    event_data = {
+        "event": "queue_updated",
+        "subject": subject,
+        "data": queue_data.model_dump(mode="json"),
+    }
+    await manager.broadcast_room_and_all(subject, event_data)
 
     return {"status": "left"}
 
@@ -200,8 +203,7 @@ async def kick_from_queue(
         "data": queue_data.model_dump(mode="json"),
         "kicked_tg_id": data.target_tg_id,
     }
-    await manager.broadcast(subject, event_data)
-    await manager.broadcast_all(event_data)
+    await manager.broadcast_room_and_all(subject, event_data)
 
     await manager.send_to_user(
         data.target_tg_id,
@@ -234,8 +236,7 @@ async def advance_queue(
         "completed_tg_id": completed_user_id,
         "data": updated_queue.model_dump(mode="json"),
     }
-    await manager.broadcast(subject, event_advance)
-    await manager.broadcast_all(event_advance)
+    await manager.broadcast_room_and_all(subject, event_advance)
 
     await manager.send_to_user(
         completed_user_id,
@@ -246,7 +247,7 @@ async def advance_queue(
         },
     )
 
-    first_in_line = await queue_service.r.get_first_in_line(subject)
+    first_in_line = await queue_service.get_first_in_line(subject)
     if first_in_line:
         _, next_uid = first_in_line
         await manager.send_to_user(
@@ -277,8 +278,7 @@ async def pause_queue(
         "subject": subject,
         "is_paused": data.paused,
     }
-    await manager.broadcast(subject, event_payload)
-    await manager.broadcast_all(event_payload)
+    await manager.broadcast_room_and_all(subject, event_payload)
 
     return {"status": "paused" if data.paused else "resumed", "data": meta.model_dump(mode="json")}
 
@@ -300,8 +300,7 @@ async def update_auto_delete(
         "subject": subject,
         "data": meta_json,
     }
-    await manager.broadcast(subject, event_payload)
-    await manager.broadcast_all(event_payload)
+    await manager.broadcast_room_and_all(subject, event_payload)
 
     return {"status": "updated", "data": meta_json}
 
@@ -316,16 +315,16 @@ async def clear_queue(
     """Curator resets/clears all participants from the queue without deleting the queue."""
     queue_service = QueueService(db, r)
     updated_queue = await queue_service.clear_queue(subject, data.curator_tg_id)
+    updated_queue_json = updated_queue.model_dump(mode="json")
 
     event_clear = {
         "event": "queue_cleared",
         "subject": subject,
-        "data": updated_queue.model_dump(mode="json"),
+        "data": updated_queue_json,
     }
-    await manager.broadcast(subject, event_clear)
-    await manager.broadcast_all(event_clear)
+    await manager.broadcast_room_and_all(subject, event_clear)
 
-    return {"status": "cleared", "data": updated_queue.model_dump(mode="json")}
+    return {"status": "cleared", "data": updated_queue_json}
 
 
 @router.delete("/{subject}")
@@ -339,8 +338,9 @@ async def delete_queue(
     queue_service = QueueService(db, r)
     await queue_service.delete_queue(subject, curator_tg_id)
 
-    await manager.broadcast(subject, {"event": "queue_deleted", "subject": subject})
-    await manager.broadcast_all({"event": "queue_deleted", "subject": subject})
+    await manager.broadcast_room_and_all(
+        subject, {"event": "queue_deleted", "subject": subject}
+    )
 
     return {"status": "deleted"}
 
@@ -357,8 +357,11 @@ async def swap_in_queue(
     await queue_service.swap(user_data.position1, user_data.position2, subject)
 
     queue_data = await queue_service.get_queue(subject)
-    event_data = {"event": "queue_updated", "subject": subject, "data": queue_data.model_dump(mode="json")}
-    await manager.broadcast(subject, event_data)
-    await manager.broadcast_all(event_data)
+    event_data = {
+        "event": "queue_updated",
+        "subject": subject,
+        "data": queue_data.model_dump(mode="json"),
+    }
+    await manager.broadcast_room_and_all(subject, event_data)
 
     return {"status": "swapped"}

@@ -1,8 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.subject import Subject
 from app.schemas.subject import Subject as SubjectCreate
-from typing import List, Optional
-from sqlalchemy import select, delete
+from sqlalchemy import select
 
 
 class SubjectRepository:
@@ -11,10 +10,10 @@ class SubjectRepository:
 
     async def get_all(
         self,
-        search: Optional[str] = None,
+        search: str | None = None,
         skip: int = 0,
         limit: int = 100,
-    ) -> List[Subject]:
+    ) -> list[Subject]:
         stmt = select(Subject)
         if search:
             stmt = stmt.where(Subject.name.ilike(f"%{search}%"))
@@ -22,12 +21,12 @@ class SubjectRepository:
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
-    async def get_by_id(self, id: int) -> Optional[Subject]:
+    async def get_by_id(self, id: int) -> Subject | None:
         stmt = select(Subject).where(Subject.id == id)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_name(self, name: str) -> Optional[Subject]:
+    async def get_by_name(self, name: str) -> Subject | None:
         stmt = select(Subject).where(Subject.name == name)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()

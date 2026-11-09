@@ -6,7 +6,7 @@ from app.db.redis.redis_client import get_redis
 from app.api.ws_manager import manager
 from app.services.swap_request_service import SwapRequestService
 from app.services.queue_service import QueueService
-from app.schemas.dto import SwapRequestCreateDto, SwapRequestRespondDto
+from app.schemas.dto import SwapRequestCreateDto, SwapRequestRespondDto, SwapRequestCancelDto
 
 router = APIRouter(prefix="/queue", tags=["swap-requests"])
 
@@ -40,7 +40,7 @@ async def create_swap_request(
     )
 
     # Personal push notification to recipient
-    note = f' "{data.message}"' if data.message else ''
+    note = f' "{data.message}"' if data.message else ""
     await manager.send_to_user(
         result.to_tg_id,
         {
@@ -112,8 +112,7 @@ async def accept_swap_request(
         "swap": result_json,
         "data": queue_json,
     }
-    await manager.broadcast(result.subject, event_swap)
-    await manager.broadcast_all(event_swap)
+    await manager.broadcast_room_and_all(result.subject, event_swap)
 
     # Personal push notification to sender that their swap was accepted!
     await manager.send_to_user(
@@ -171,7 +170,7 @@ async def reject_swap_request(
 @router.post("/swap-request/{request_id}/cancel")
 async def cancel_swap_request(
     request_id: str,
-    data: SwapRequestRespondDto,
+    data: SwapRequestCancelDto,
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):

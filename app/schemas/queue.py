@@ -1,12 +1,10 @@
 from pydantic import BaseModel, ConfigDict
-from typing import List
 
 
 class QueueUserInfo(BaseModel):
     name: str | None = None
     tg_id: int | None = None
     position: int
-    target_position: int | None = None
     photo_url: str | None = None
     is_free: bool
 

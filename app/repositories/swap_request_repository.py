@@ -1,14 +1,17 @@
 import uuid
 from datetime import datetime, timezone
 from redis.asyncio import Redis
-
-SWAP_REQUEST_TTL = 24 * 60 * 60  # 24 hours
+from app.core.config import settings
 
 
 class SwapRequestRepository:
 
     def __init__(self, r: Redis):
         self.r = r
+
+    @property
+    def ttl(self) -> int:
+        return settings.swap_request_ttl_hours * 3600
 
     def _request_key(self, request_id: str) -> str:
         return f"swap_request:{request_id}"
@@ -18,6 +21,12 @@ class SwapRequestRepository:
 
     def _outgoing_key(self, subject: str, tg_id: int) -> str:
         return f"swap_outgoing:{subject}:{tg_id}"
+
+    def _user_all_incoming_key(self, tg_id: int) -> str:
+        return f"swap_user_incoming:{tg_id}"
+
+    def _user_all_outgoing_key(self, tg_id: int) -> str:
+        return f"swap_user_outgoing:{tg_id}"
 
     def _queue_requests_key(self, subject: str) -> str:
         return f"swap_queue:{subject}"
@@ -34,8 +43,16 @@ class SwapRequestRepository:
         request_id = str(uuid.uuid4())
         key = self._request_key(request_id)
         now = datetime.now(timezone.utc).isoformat()
+        ttl = self.ttl
 
-        await self.r.hset(
+        incoming_key = self._incoming_key(subject, to_tg_id)
+        outgoing_key = self._outgoing_key(subject, from_tg_id)
+        user_incoming_key = self._user_all_incoming_key(to_tg_id)
+        user_outgoing_key = self._user_all_outgoing_key(from_tg_id)
+        queue_key = self._queue_requests_key(subject)
+
+        pipe = self.r.pipeline(transaction=True)
+        pipe.hset(
             key,
             mapping={
                 "id": request_id,
@@ -50,28 +67,26 @@ class SwapRequestRepository:
                 "created_at": now,
             },
         )
-        await self.r.expire(key, SWAP_REQUEST_TTL)
+        pipe.expire(key, ttl)
 
-        # Index for fast lookup
-        incoming_key = self._incoming_key(subject, to_tg_id)
-        outgoing_key = self._outgoing_key(subject, from_tg_id)
-        queue_key = self._queue_requests_key(subject)
+        pipe.sadd(incoming_key, request_id)
+        pipe.expire(incoming_key, ttl)
+        pipe.sadd(outgoing_key, request_id)
+        pipe.expire(outgoing_key, ttl)
+        pipe.sadd(user_incoming_key, request_id)
+        pipe.expire(user_incoming_key, ttl)
+        pipe.sadd(user_outgoing_key, request_id)
+        pipe.expire(user_outgoing_key, ttl)
+        pipe.sadd(queue_key, request_id)
+        pipe.expire(queue_key, ttl)
 
-        await self.r.sadd(incoming_key, request_id)
-        await self.r.expire(incoming_key, SWAP_REQUEST_TTL)
-        await self.r.sadd(outgoing_key, request_id)
-        await self.r.expire(outgoing_key, SWAP_REQUEST_TTL)
-        await self.r.sadd(queue_key, request_id)
-        await self.r.expire(queue_key, SWAP_REQUEST_TTL)
-
+        await pipe.execute()
         return request_id
 
     async def get(self, request_id: str) -> dict | None:
         key = self._request_key(request_id)
         data = await self.r.hgetall(key)
-        if not data:
-            return None
-        return data
+        return data if data else None
 
     async def get_incoming_requests(self, subject: str, tg_id: int) -> list[dict]:
         incoming_key = self._incoming_key(subject, tg_id)
@@ -98,39 +113,39 @@ class SwapRequestRepository:
         return requests
 
     async def get_all_incoming_requests(self, tg_id: int) -> list[dict]:
-        keys = []
-        async for key in self.r.scan_iter(match=f"swap_incoming:*:{tg_id}"):
-            keys.append(key)
-        request_ids = set()
-        for k in keys:
-            members = await self.r.smembers(k)
-            request_ids.update(members)
+        user_key = self._user_all_incoming_key(tg_id)
+        request_ids = await self.r.smembers(user_key)
+        # Fallback to scan if user index is empty (for backward compatibility)
+        if not request_ids:
+            keys = [k async for k in self.r.scan_iter(match=f"swap_incoming:*:{tg_id}")]
+            for k in keys:
+                request_ids.update(await self.r.smembers(k))
+
         requests = []
         for rid in request_ids:
             data = await self.get(rid)
             if data and data.get("status") == "pending":
                 requests.append(data)
             else:
-                for k in keys:
-                    await self.r.srem(k, rid)
+                await self.r.srem(user_key, rid)
         return requests
 
     async def get_all_outgoing_requests(self, tg_id: int) -> list[dict]:
-        keys = []
-        async for key in self.r.scan_iter(match=f"swap_outgoing:*:{tg_id}"):
-            keys.append(key)
-        request_ids = set()
-        for k in keys:
-            members = await self.r.smembers(k)
-            request_ids.update(members)
+        user_key = self._user_all_outgoing_key(tg_id)
+        request_ids = await self.r.smembers(user_key)
+        # Fallback to scan if user index is empty (for backward compatibility)
+        if not request_ids:
+            keys = [k async for k in self.r.scan_iter(match=f"swap_outgoing:*:{tg_id}")]
+            for k in keys:
+                request_ids.update(await self.r.smembers(k))
+
         requests = []
         for rid in request_ids:
             data = await self.get(rid)
             if data and data.get("status") == "pending":
                 requests.append(data)
             else:
-                for k in keys:
-                    await self.r.srem(k, rid)
+                await self.r.srem(user_key, rid)
         return requests
 
     async def has_pending_outgoing(self, subject: str, from_tg_id: int) -> bool:
@@ -153,23 +168,28 @@ class SwapRequestRepository:
         self, request_id: str, status: str, response_message: str = ""
     ) -> None:
         key = self._request_key(request_id)
-        await self.r.hset(key, "status", status)
-        if response_message:
-            await self.r.hset(key, "response_message", response_message)
+        data = await self.get(request_id)
 
-        # If resolved, remove from all active indices
-        if status != "pending":
-            data = await self.get(request_id)
-            if data:
-                subject = data.get("subject")
-                to_tg_id = data.get("to_tg_id")
-                from_tg_id = data.get("from_tg_id")
-                if subject:
-                    await self.r.srem(self._queue_requests_key(subject), request_id)
-                    if to_tg_id:
-                        await self.r.srem(self._incoming_key(subject, int(to_tg_id)), request_id)
-                    if from_tg_id:
-                        await self.r.srem(self._outgoing_key(subject, int(from_tg_id)), request_id)
+        pipe = self.r.pipeline(transaction=True)
+        pipe.hset(key, "status", status)
+        if response_message:
+            pipe.hset(key, "response_message", response_message)
+
+        # If resolved or cancelled, remove from all active pending indices
+        if status != "pending" and data:
+            subject = data.get("subject")
+            to_tg_id = data.get("to_tg_id")
+            from_tg_id = data.get("from_tg_id")
+            if subject:
+                pipe.srem(self._queue_requests_key(subject), request_id)
+                if to_tg_id:
+                    pipe.srem(self._incoming_key(subject, int(to_tg_id)), request_id)
+                    pipe.srem(self._user_all_incoming_key(int(to_tg_id)), request_id)
+                if from_tg_id:
+                    pipe.srem(self._outgoing_key(subject, int(from_tg_id)), request_id)
+                    pipe.srem(self._user_all_outgoing_key(int(from_tg_id)), request_id)
+
+        await pipe.execute()
 
     async def delete(self, request_id: str) -> None:
         data = await self.get(request_id)
@@ -180,23 +200,24 @@ class SwapRequestRepository:
         from_tg_id = int(data["from_tg_id"])
         to_tg_id = int(data["to_tg_id"])
 
-        await self.r.srem(self._incoming_key(subject, to_tg_id), request_id)
-        await self.r.srem(self._outgoing_key(subject, from_tg_id), request_id)
-        await self.r.srem(self._queue_requests_key(subject), request_id)
-        await self.r.delete(self._request_key(request_id))
+        pipe = self.r.pipeline(transaction=True)
+        pipe.srem(self._incoming_key(subject, to_tg_id), request_id)
+        pipe.srem(self._outgoing_key(subject, from_tg_id), request_id)
+        pipe.srem(self._user_all_incoming_key(to_tg_id), request_id)
+        pipe.srem(self._user_all_outgoing_key(from_tg_id), request_id)
+        pipe.srem(self._queue_requests_key(subject), request_id)
+        pipe.delete(self._request_key(request_id))
+        await pipe.execute()
 
     async def cancel_all_for_user_in_queue(
         self, subject: str, tg_id: int
     ) -> list[dict]:
         cancelled = []
-
-        # Outgoing
         outgoing = await self.get_outgoing_requests(subject, tg_id)
         for req in outgoing:
             await self.update_status(req["id"], "cancelled")
             cancelled.append(req)
 
-        # Incoming
         incoming = await self.get_incoming_requests(subject, tg_id)
         for req in incoming:
             await self.update_status(req["id"], "cancelled")
