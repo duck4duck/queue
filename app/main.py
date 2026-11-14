@@ -73,21 +73,33 @@ app.add_middleware(
 )
 
 
+EXCLUDE_PATHS = {"/health", "/docs", "/openapi.json"}
+
+
 # ──────────────────── Request Logging Middleware ────────────────────
 @app.middleware("http")
 async def log_requests_middleware(request: Request, call_next):
     start_time = time.perf_counter()
-    client_ip = request.client.host if request.client else "unknown"
+
+    client_ip = (
+        request.headers.get("CF-Connecting-IP")
+        or request.headers.get("X-Forwarded-For")
+        or (request.client.host if request.client else "unknown")
+    )
 
     try:
         response = await call_next(request)
         process_time_ms = (time.perf_counter() - start_time) * 1000
-        logger.info(
-            f"{request.method} {request.url.path} -> {response.status_code} "
-            f"({process_time_ms:.2f}ms) | IP: {client_ip}"
-        )
+
+        if request.url.path not in EXCLUDE_PATHS:
+            logger.info(
+                f"{request.method} {request.url.path} -> {response.status_code} "
+                f"({process_time_ms:.2f}ms) | IP: {client_ip}"
+            )
+
         response.headers["X-Process-Time-Ms"] = f"{process_time_ms:.2f}"
         return response
+
     except Exception as exc:
         process_time_ms = (time.perf_counter() - start_time) * 1000
         logger.error(
@@ -96,7 +108,6 @@ async def log_requests_middleware(request: Request, call_next):
             exc_info=True,
         )
         raise exc
-
 
 # ──────────────────── Routers ────────────────────
 app.include_router(main_router)
