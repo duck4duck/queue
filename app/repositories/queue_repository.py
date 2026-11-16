@@ -86,6 +86,48 @@ class QueueRepository:
             return int(uid)
         return None
 
+    async def move_user(self, subject: str, user_id: int, new_position: int) -> int:
+        """
+        Atomically move user to new_position in Redis via Lua script.
+        Returns:
+            > 0: old position (successful move)
+            0: user already at new_position
+            -1: new_position already taken
+            -2: user not in queue
+        """
+        script = """
+        local queue_key = KEYS[1]
+        local user_id = ARGV[1]
+        local new_pos = ARGV[2]
+
+        local all = redis.call('hgetall', queue_key)
+        local old_pos = nil
+        for i = 1, #all, 2 do
+            if all[i+1] == user_id then
+                old_pos = all[i]
+                break
+            end
+        end
+
+        if not old_pos then
+            return -2
+        end
+
+        if old_pos == new_pos then
+            return 0
+        end
+
+        if redis.call('hexists', queue_key, new_pos) == 1 then
+            return -1
+        end
+
+        redis.call('hdel', queue_key, old_pos)
+        redis.call('hset', queue_key, new_pos, user_id)
+        return tonumber(old_pos)
+        """
+        res = await self.r.eval(script, 1, self._queue_key(subject), str(user_id), str(new_position))
+        return int(res)
+
     async def get_first_in_line(self, subject: str) -> tuple[int, int] | None:
         """Returns (position, user_id) of the lowest occupied slot."""
         queue = await self.get_queue(subject)

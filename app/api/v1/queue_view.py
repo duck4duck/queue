@@ -42,6 +42,7 @@ async def create_queue(
     meta_json = meta.model_dump(mode="json")
     await manager.broadcast_all({
         "event": "queue_created",
+        "subject": meta.subject,
         "data": meta_json,
     })
     return {"status": "created", "data": meta_json}
@@ -180,6 +181,25 @@ async def leave_queue(
     await manager.broadcast_all(event_data)
 
     return {"status": "left"}
+
+
+@router.post("/{subject}/move")
+async def move_queue_position(
+    subject: str,
+    user_data: UserDto,
+    db: AsyncSession = Depends(get_db),
+    r: Redis = Depends(get_redis),
+):
+    """Atomically move participant to a free position in the queue."""
+    queue_service = QueueService(db, r)
+    await queue_service.move(subject, user_data.tg_id, user_data.position)
+
+    queue_data = await queue_service.get_queue(subject)
+    event_data = {"event": "queue_updated", "subject": subject, "data": queue_data.model_dump(mode="json")}
+    await manager.broadcast(subject, event_data)
+    await manager.broadcast_all(event_data)
+
+    return {"status": "moved", "position": user_data.position}
 
 
 @router.post("/{subject}/kick")
