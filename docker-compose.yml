@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-strong_password}
       POSTGRES_DB: ${DB_NAME:-myapp_db}
     ports:
-      - "127.0.0.1:${DB_PORT:-5432}:5432"
+      - "127.0.0.1:${DB_PORT:-8003}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -29,7 +29,7 @@ services:
     container_name: redis_cache
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6378}:6379"
     volumes:
       - redis_data:/data
     environment:
@@ -58,7 +58,7 @@ services:
       DB_HOST: db
       REDIS_HOST: redis
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "127.0.0.1:${APP_PORT:-5433}:5433"
     depends_on:
       db:
         condition: service_healthy
