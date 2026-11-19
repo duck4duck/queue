@@ -215,8 +215,6 @@ class SwapRequestService:
             raise Forbidden("Только отправитель может отменить свой запрос на обмен!")
 
         await self.swap_repo.update_status(request_id, "cancelled")
-        await self.swap_repo.delete(request_id)
-
         logger.info(f"Swap request {request_id} cancelled by sender tg_id={tg_id}")
 
         return SwapRequestInfo(
@@ -231,20 +229,34 @@ class SwapRequestService:
             created_at=data.get("created_at", ""),
         )
 
-    async def get_incoming_requests(
-        self, subject: str, tg_id: int
-    ) -> SwapRequestListResponse:
-        requests = await self.swap_repo.get_incoming_requests(subject, tg_id)
+    async def _enrich_requests(self, requests: list[dict]) -> list[SwapRequestInfo]:
+        """Batch-enrich swap requests with user names in a single database query (solves N+1 problem)."""
+        if not requests:
+            return []
+
+        uids = set()
+        for req in requests:
+            if "from_tg_id" in req:
+                uids.add(int(req["from_tg_id"]))
+            if "to_tg_id" in req:
+                uids.add(int(req["to_tg_id"]))
+
+        users = await self.user_service.get_by_tg_ids(list(uids))
+        user_map = {u.tg_id: u for u in users}
+
         result = []
         for req in requests:
-            from_user = await self.user_service.get_user_by_tg_id(int(req["from_tg_id"]))
-            to_user = await self.user_service.get_user_by_tg_id(int(req["to_tg_id"]))
+            from_id = int(req["from_tg_id"])
+            to_id = int(req["to_tg_id"])
+            from_user = user_map.get(from_id)
+            to_user = user_map.get(to_id)
+
             result.append(
                 SwapRequestInfo(
                     id=req["id"],
                     subject=req["subject"],
-                    from_tg_id=int(req["from_tg_id"]),
-                    to_tg_id=int(req["to_tg_id"]),
+                    from_tg_id=from_id,
+                    to_tg_id=to_id,
                     from_position=int(req["from_position"]),
                     to_position=int(req["to_position"]),
                     from_name=from_user.name if from_user else None,
@@ -254,79 +266,32 @@ class SwapRequestService:
                     created_at=req.get("created_at", ""),
                 )
             )
+        return result
+
+    async def get_incoming_requests(
+        self, subject: str, tg_id: int
+    ) -> SwapRequestListResponse:
+        requests = await self.swap_repo.get_incoming_requests(subject, tg_id)
+        result = await self._enrich_requests(requests)
         return SwapRequestListResponse(requests=result, total=len(result))
 
     async def get_outgoing_requests(
         self, subject: str, tg_id: int
     ) -> SwapRequestListResponse:
         requests = await self.swap_repo.get_outgoing_requests(subject, tg_id)
-        result = []
-        for req in requests:
-            from_user = await self.user_service.get_user_by_tg_id(int(req["from_tg_id"]))
-            to_user = await self.user_service.get_user_by_tg_id(int(req["to_tg_id"]))
-            result.append(
-                SwapRequestInfo(
-                    id=req["id"],
-                    subject=req["subject"],
-                    from_tg_id=int(req["from_tg_id"]),
-                    to_tg_id=int(req["to_tg_id"]),
-                    from_position=int(req["from_position"]),
-                    to_position=int(req["to_position"]),
-                    from_name=from_user.name if from_user else None,
-                    to_name=to_user.name if to_user else None,
-                    message=req.get("message", ""),
-                    status=req["status"],
-                    created_at=req.get("created_at", ""),
-                )
-            )
+        result = await self._enrich_requests(requests)
         return SwapRequestListResponse(requests=result, total=len(result))
 
     async def get_all_incoming_requests(
         self, tg_id: int
     ) -> SwapRequestListResponse:
         requests = await self.swap_repo.get_all_incoming_requests(tg_id)
-        result = []
-        for req in requests:
-            from_user = await self.user_service.get_user_by_tg_id(int(req["from_tg_id"]))
-            to_user = await self.user_service.get_user_by_tg_id(int(req["to_tg_id"]))
-            result.append(
-                SwapRequestInfo(
-                    id=req["id"],
-                    subject=req["subject"],
-                    from_tg_id=int(req["from_tg_id"]),
-                    to_tg_id=int(req["to_tg_id"]),
-                    from_position=int(req["from_position"]),
-                    to_position=int(req["to_position"]),
-                    from_name=from_user.name if from_user else None,
-                    to_name=to_user.name if to_user else None,
-                    message=req.get("message", ""),
-                    status=req["status"],
-                    created_at=req.get("created_at", ""),
-                )
-            )
+        result = await self._enrich_requests(requests)
         return SwapRequestListResponse(requests=result, total=len(result))
 
     async def get_all_outgoing_requests(
         self, tg_id: int
     ) -> SwapRequestListResponse:
         requests = await self.swap_repo.get_all_outgoing_requests(tg_id)
-        result = []
-        for req in requests:
-            from_user = await self.user_service.get_user_by_tg_id(int(req["from_tg_id"]))
-            to_user = await self.user_service.get_user_by_tg_id(int(req["to_tg_id"]))
-            result.append(
-                SwapRequestInfo(
-                    id=req["id"],
-                    subject=req["subject"],
-                    from_tg_id=int(req["from_tg_id"]),
-                    to_tg_id=int(req["to_tg_id"]),
-                    from_position=int(req["from_position"]),
-                    to_position=int(req["to_position"]),
-                    from_name=from_user.name if from_user else None,
-                    to_name=to_user.name if to_user else None,
-                    message=req.get("message", ""),
-                    status=req["status"],
-                    created_at=req.get("created_at", ""),
-                )
-            )
+        result = await self._enrich_requests(requests)
         return SwapRequestListResponse(requests=result, total=len(result))

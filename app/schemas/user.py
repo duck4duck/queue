@@ -1,5 +1,4 @@
 from pydantic import BaseModel, ConfigDict
-from typing import List
 
 
 class User(BaseModel):
@@ -16,7 +15,7 @@ class UserResponse(User):
 
 
 class UserListResponse(BaseModel):
-    users: List[UserResponse]
+    users: list[UserResponse]
     total: int
 
     model_config = ConfigDict(from_attributes=True)

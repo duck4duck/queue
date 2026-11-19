@@ -1,6 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.user_repository import UserRepository
-from typing import List, Optional
 from app.schemas.user import UserResponse, UserListResponse, User, UserUpdate
 from app.schemas.exception import UserNotFound, InvalidRole
 from app.core.logger import logger
@@ -14,8 +13,8 @@ class UserService:
 
     async def get_all_users(
         self,
-        search: Optional[str] = None,
-        role: Optional[str] = None,
+        search: str | None = None,
+        role: str | None = None,
         skip: int = 0,
         limit: int = 100,
     ) -> UserListResponse:
@@ -26,10 +25,10 @@ class UserService:
     async def get_user_by_id(self, id: int) -> UserResponse:
         user = await self.repository.get_by_id(id=id)
         if user is None:
-            raise UserNotFound("Пользователь не найден!")
+            raise UserNotFound()
         return UserResponse.model_validate(user)
 
-    async def get_user_by_tg_id(self, tg_id: int) -> Optional[UserResponse]:
+    async def get_user_by_tg_id(self, tg_id: int) -> UserResponse | None:
         user = await self.repository.get_by_tg_id(tg_id=tg_id)
         if user is None:
             return None
@@ -38,7 +37,7 @@ class UserService:
     async def get_user_by_username(self, username: str) -> UserResponse:
         user = await self.repository.get_by_username(username=username)
         if user is None:
-            raise UserNotFound("Пользователь не найден!")
+            raise UserNotFound()
         return UserResponse.model_validate(user)
 
     async def create_user(self, user_data: User) -> dict:
@@ -60,17 +59,8 @@ class UserService:
             raise InvalidRole()
         user = await self.repository.update_user_by_tg_id(tg_id, user_data)
         if user is None:
-            raise UserNotFound("Пользователь не найден!")
+            raise UserNotFound()
         logger.info(f"User updated: tg_id={tg_id}")
-        return {"message": "user successfully updated!"}
-
-    async def update_user_by_id(self, id: int, user_data: UserUpdate) -> dict:
-        if user_data.role is not None and user_data.role not in VALID_ROLES:
-            raise InvalidRole()
-        user = await self.repository.update_user_by_id(id, user_data)
-        if user is None:
-            raise UserNotFound("Пользователь не найден!")
-        logger.info(f"User updated: id={id}")
         return {"message": "user successfully updated!"}
 
     async def set_role(self, tg_id: int, role: str) -> UserResponse:
@@ -78,23 +68,24 @@ class UserService:
             raise InvalidRole()
         user = await self.repository.update_user_by_tg_id(tg_id, UserUpdate(role=role))
         if user is None:
-            raise UserNotFound("Пользователь не найден!")
+            raise UserNotFound()
         logger.info(f"Role updated for tg_id={tg_id}: '{role}'")
         return UserResponse.model_validate(user)
 
     async def delete_user_by_id(self, id: int) -> dict:
         result = await self.repository.delete_user_by_id(id)
         if not result:
-            raise UserNotFound("Пользователь не найден!")
+            raise UserNotFound()
         logger.info(f"User deleted: id={id}")
         return {"message": "user successfully deleted!"}
 
-    async def delete_user_by_tg_id(self, id: int) -> dict:
-        result = await self.repository.delete_user_by_tg_id(id)
+    async def delete_user_by_tg_id(self, tg_id: int) -> dict:
+        result = await self.repository.delete_user_by_tg_id(tg_id)
         if not result:
-            raise UserNotFound("Пользователь не найден!")
-        logger.info(f"User deleted: tg_id={id}")
+            raise UserNotFound()
+        logger.info(f"User deleted: tg_id={tg_id}")
         return {"message": "user successfully deleted!"}
 
-    async def get_by_tg_ids(self, ids: list[int]):
-        return await self.repository.get_by_tg_ids(ids)
+    async def get_by_tg_ids(self, ids: list[int]) -> list[UserResponse]:
+        users = await self.repository.get_by_tg_ids(ids)
+        return [UserResponse.model_validate(u) for u in users]

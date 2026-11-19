@@ -1,10 +1,10 @@
-from typing import AsyncGenerator, Optional
+from collections.abc import AsyncGenerator
 from redis.asyncio import Redis, ConnectionPool
 from app.core.config import settings
 from app.core.logger import logger
 
-_redis_pool: Optional[ConnectionPool] = None
-_redis_client: Optional[Redis] = None
+_redis_pool: ConnectionPool | None = None
+_redis_client: Redis | None = None
 
 
 def get_redis_pool() -> ConnectionPool:
@@ -13,7 +13,7 @@ def get_redis_pool() -> ConnectionPool:
         _redis_pool = ConnectionPool(
             host=settings.redis_host,
             port=int(settings.redis_port),
-            password=settings.redis_password,
+            password=settings.redis_password or None,
             decode_responses=True,
             max_connections=settings.redis_max_connections,
         )
