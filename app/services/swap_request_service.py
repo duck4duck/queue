@@ -4,6 +4,7 @@ from app.services.user_service import UserService
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 from app.core.logger import logger
+from app.core.config import settings
 from app.schemas.exception import (
     UserNotFound,
     UserNotInQueue,
@@ -48,6 +49,11 @@ class SwapRequestService:
 
         if from_position == to_position:
             raise InvalidPosition("Нельзя обменяться с самим собой!")
+
+        if to_position < 1 or to_position > settings.default_max_positions:
+            raise InvalidPosition(
+                f"Некорректный номер позиции. Число должно быть от 1 до {settings.default_max_positions}!"
+            )
 
         to_tg_id = await self.queue_repo.get_user_at_position(subject, to_position)
         if to_tg_id is None:
@@ -131,7 +137,11 @@ class SwapRequestService:
             )
 
         # Execute the swap
-        await self.queue_repo.swap(subject, from_position, to_position)
+        if not await self.queue_repo.swap(subject, from_position, to_position):
+            await self.swap_repo.update_status(request_id, "expired")
+            raise SwapRequestExpired(
+                "Позиции изменились. Запрос на обмен больше не актуален."
+            )
         await self.swap_repo.update_status(request_id, "accepted", message)
 
         from_user = await self.user_service.get_user_by_tg_id(from_tg_id)

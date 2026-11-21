@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UserDto(BaseModel):
@@ -15,13 +15,13 @@ class SwapRequestCreateDto(BaseModel):
     """User A wants to swap with whoever is at to_position, attaching a text message."""
     from_tg_id: int
     to_position: int
-    message: str = ""
+    message: str = Field(default="", max_length=500)
 
 
 class SwapRequestRespondDto(BaseModel):
     """Accept or reject a swap request with an optional message."""
     tg_id: int
-    message: str = ""
+    message: str = Field(default="", max_length=500)
 
 
 class SwapRequestCancelDto(BaseModel):

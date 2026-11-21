@@ -582,7 +582,8 @@ class QueueService:
         if not await self.queue_repo.is_position_taken(subject, pos2):
             raise UserNotInQueue(f"На позиции {pos2} никого нет!")
 
-        await self.queue_repo.swap(subject, pos1, pos2)
+        if not await self.queue_repo.swap(subject, pos1, pos2):
+            raise PositionEmpty("Позиции изменились. Обновите очередь и повторите обмен.")
         await self.queue_repo.log_event(subject, "swap", f"Обмен местами: #{pos1} ↔ #{pos2}")
         logger.info(f"Direct swap in '{subject}': #{pos1} ↔ #{pos2}")
 

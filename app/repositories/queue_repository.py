@@ -94,16 +94,22 @@ class QueueRepository:
         users = await self.r.hgetall(key)
         return {int(slot): int(uid) for slot, uid in users.items()}
 
-    async def swap(self, subject: str, pos1: int, pos2: int) -> None:
+    async def swap(self, subject: str, pos1: int, pos2: int) -> bool:
+        """Atomically exchange two occupied positions if their contents are unchanged."""
         key = self._queue_key(subject)
-        uid1 = await self.r.hget(key, str(pos1))
-        uid2 = await self.r.hget(key, str(pos2))
-
-        if uid1 and uid2:
-            pipe = self.r.pipeline(transaction=True)
-            pipe.hset(key, str(pos1), uid2)
-            pipe.hset(key, str(pos2), uid1)
-            await pipe.execute()
+        script = """
+        local first = redis.call('HGET', KEYS[1], ARGV[1])
+        local second = redis.call('HGET', KEYS[1], ARGV[2])
+        if not first or not second or first ~= ARGV[3] or second ~= ARGV[4] then
+            return 0
+        end
+        redis.call('HSET', KEYS[1], ARGV[1], second, ARGV[2], first)
+        return 1
+        """
+        first, second = await self.r.hmget(key, str(pos1), str(pos2))
+        if not first or not second:
+            return False
+        return bool(await self.r.eval(script, 1, key, str(pos1), str(pos2), first, second))
 
     async def clear_participants(self, subject: str) -> None:
         """Clears only the student participants, keeping queue metadata and history."""

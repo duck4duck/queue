@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.postgres.database import get_db
 from app.services.subject_service import SubjectService
@@ -10,8 +10,8 @@ router = APIRouter(prefix="/api/subjects", tags=["subjects"])
 @router.get("", response_model=ListOfSubjects, status_code=status.HTTP_200_OK)
 async def get_all_subjects(
     search: str | None = None,
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
     """Get the catalog of all available subjects with optional search query."""

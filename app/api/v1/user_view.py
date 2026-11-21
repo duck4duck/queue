@@ -1,4 +1,4 @@
-from fastapi import APIRouter, status, Depends
+from fastapi import APIRouter, status, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.user import UserResponse, User, UserListResponse, UserUpdate
 from app.schemas.dto import SetRoleDto
@@ -13,8 +13,8 @@ router = APIRouter(prefix="/api/users", tags=["users"])
 async def get_users(
     search: str | None = None,
     role: str | None = None,
-    skip: int = 0,
-    limit: int = 100,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
 ):
     """Get list of users with optional search and role filtering."""
