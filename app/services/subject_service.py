@@ -42,3 +42,9 @@ class SubjectService:
         if not deleted:
             raise SubjectNotFound(f"Предмет с id={id} не найден!")
         return {"message": "subject successfully deleted"}
+
+    async def delete_subject_by_name(self, name: str) -> dict:
+        deleted = await self.repository.delete_by_name(name)
+        if not deleted:
+            raise SubjectNotFound(f"Предмет '{name}' не найден!")
+        return {"message": "subject successfully deleted"}

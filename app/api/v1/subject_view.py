@@ -38,3 +38,10 @@ async def delete_subject(id: int, db: AsyncSession = Depends(get_db)):
     """Delete a subject by its ID."""
     service = SubjectService(db)
     return await service.delete_subject(id)
+
+
+@router.delete("/by-name/{name}", status_code=status.HTTP_200_OK)
+async def delete_subject_by_name(name: str, db: AsyncSession = Depends(get_db)):
+    """Delete a subject by its exact name."""
+    service = SubjectService(db)
+    return await service.delete_subject_by_name(name)

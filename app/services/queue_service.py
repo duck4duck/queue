@@ -333,6 +333,32 @@ class QueueService:
 
         return await self.get_queue(subject)
 
+    async def move(self, subject: str, user_id: int, position: int) -> QueueResponse:
+        if await self.r.is_queue_paused(subject):
+            raise QueuePaused("Очередь приостановлена! Смена мест временно закрыта.")
+
+        user = await self.user_service.get_user_by_tg_id(user_id)
+        if user is None:
+            raise UserNotFound("Пользователь не найден!")
+
+        if position < 1 or position > self.max_positions:
+            raise InvalidPosition(f"Некорректный номер позиции. Число должно быть от 1 до {self.max_positions}!")
+
+        result = await self.r.move_user(subject, user_id, position)
+        if result == -1:
+            raise PositionTaken(f"Позиция {position} уже занята другим участником!")
+        if result == -2:
+            raise UserNotInQueue("Вы не состоите в этой очереди!")
+        if result == 0:
+            return await self.get_queue(subject)
+
+        old_position = result
+        await self.swap_repo.cancel_all_for_user_in_queue(subject, user_id)
+        await self.r.log_event(subject, "move", f"{user.name} перешел(ла) с места #{old_position} на #{position}")
+        logger.info(f"User {user.name} (tg_id={user_id}) moved in '{subject}' from #{old_position} to #{position}")
+
+        return await self.get_queue(subject)
+
     # ──────────────────── Curator Actions: Kick & Advance ────────────────────
 
     async def kick(

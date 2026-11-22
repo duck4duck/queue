@@ -119,6 +119,7 @@ async def accept_swap_request(
         result.from_tg_id,
         {
             "event": "swap_accepted",
+            "subject": result.subject,
             "data": result_json,
             "message": f"{result.to_name or 'Пользователь'} принял ваш запрос на обмен!",
         },
@@ -159,6 +160,7 @@ async def reject_swap_request(
         result.from_tg_id,
         {
             "event": "swap_rejected",
+            "subject": result.subject,
             "data": result_json,
             "message": f"{result.to_name or 'Пользователь'} отклонил ваш запрос на обмен",
         },
@@ -197,6 +199,7 @@ async def cancel_swap_request(
         result.to_tg_id,
         {
             "event": "swap_cancelled",
+            "subject": result.subject,
             "data": result_json,
             "message": "Запрос на обмен был отозван отправителем.",
         },

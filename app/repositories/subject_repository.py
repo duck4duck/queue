@@ -47,3 +47,14 @@ class SubjectRepository:
         await self.db.delete(subject)
         await self.db.commit()
         return True
+
+    async def delete_by_name(self, name: str) -> bool:
+        stmt = select(Subject).where(Subject.name.ilike(name))
+        result = await self.db.execute(stmt)
+        subjects = list(result.scalars().all())
+        if not subjects:
+            return False
+        for s in subjects:
+            await self.db.delete(s)
+        await self.db.commit()
+        return True
