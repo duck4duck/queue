@@ -7,7 +7,38 @@ from sqlalchemy.engine import URL
 
 # Telegram IDs can be placed here while access lists are being managed in code.
 # An empty participant list means that every authenticated Telegram user is allowed.
-TELEGRAM_WHITELIST_IDS: list[int] = []
+TELEGRAM_WHITELIST_IDS: list[int] = [
+    1030117740,
+    5074618982,
+    5301217958,
+    874632185,
+    1954461025,
+    1078482303,
+    1025120180,
+    1928670378,
+    1794978592,
+    1058850915,
+    1705465838,
+    9057631179,
+    5531350152,
+    1123612682,
+    5835936839,
+    1106278834,
+    2019800273,
+    1718974462,
+    805959737,
+    5071185985,
+    991696505,
+    1414740361,
+    1073970836,
+    5285661442,
+    914334914,
+    1104871294,
+    1006402153,
+    997211041,
+    893807304,
+    1122397134,
+]
 TELEGRAM_ADMIN_IDS: list[int] = [1006402153,997211041,893807304,1122397134]
 DEFAULT_QUEUE_SHARE_URL_TEMPLATE = "https://t.me/queue_college_bot/queue?startapp={subject}"
 
