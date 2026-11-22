@@ -16,7 +16,7 @@ from app.models.user import User
 config = context.config
 
 section = config.config_ini_section
-config.set_section_option(section, "sqlalchemy.url", settings.database_url)
+config.set_section_option(section, "sqlalchemy.url", settings.database_url.replace("%", "%%"))
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

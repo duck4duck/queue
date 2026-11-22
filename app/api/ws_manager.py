@@ -18,7 +18,7 @@ class WSManager:
     async def _send_and_cleanup(sockets: list[WebSocket], data: dict) -> None:
         """Send JSON data to a list of sockets and prune disconnected ones."""
         dead = []
-        for ws in sockets:
+        for ws in list(sockets):
             try:
                 await ws.send_json(data)
             except Exception:
@@ -47,7 +47,7 @@ class WSManager:
             return
         sockets = self.connections[subject]
         await self._send_and_cleanup(sockets, data)
-        if not sockets and subject in self.connections:
+        if not sockets and self.connections.get(subject) is sockets:
             del self.connections[subject]
 
     # ──────────────────── Personal User WebSockets ────────────────────
@@ -70,14 +70,14 @@ class WSManager:
             return
         sockets = self.user_connections[tg_id]
         await self._send_and_cleanup(sockets, data)
-        if not sockets and tg_id in self.user_connections:
+        if not sockets and self.user_connections.get(tg_id) is sockets:
             del self.user_connections[tg_id]
 
     async def broadcast_all(self, data: dict) -> None:
         """Broadcast an event to all connected users across the application."""
         for tg_id, sockets in list(self.user_connections.items()):
             await self._send_and_cleanup(sockets, data)
-            if not sockets and tg_id in self.user_connections:
+            if not sockets and self.user_connections.get(tg_id) is sockets:
                 del self.user_connections[tg_id]
 
     async def broadcast_room_and_all(self, subject: str, data: dict) -> None:

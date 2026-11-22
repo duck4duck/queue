@@ -2,10 +2,11 @@ import asyncio
 import json
 import logging
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart
 from aiogram.types import Message, ChatMemberUpdated
 from redis.asyncio import Redis
+from redis.exceptions import ConnectionError, TimeoutError
 
 from bot.settings import settings
 
@@ -31,23 +32,25 @@ async def bot_added_to_group(update: ChatMemberUpdated) -> None:
 
 
 async def publish_events() -> None:
-    redis = Redis.from_url(settings.redis_url, decode_responses=True)
-    try:
-        pubsub = redis.pubsub()
-        await pubsub.subscribe("queue_events")
-        async for message in pubsub.listen():
-            if message.get("type") != "message":
-                continue
+    async with Redis.from_url(settings.redis_url, decode_responses=True) as redis:
+        while True:
             try:
-                event = json.loads(message["data"])
-                if event["type"] == "swap_request":
-                    await notify_swap(event)
-                elif event["type"] == "queue_created":
-                    await notify_groups(event)
-            except Exception:
-                logger.exception("Failed to process queue event")
-    finally:
-        await redis.aclose()
+                async with redis.pubsub() as pubsub:
+                    await pubsub.subscribe("queue_events")
+                    async for message in pubsub.listen():
+                        if message.get("type") != "message":
+                            continue
+                        try:
+                            event = json.loads(message["data"])
+                            if event["type"] == "swap_request":
+                                await notify_swap(event)
+                            elif event["type"] == "queue_created":
+                                await notify_groups(event, redis)
+                        except Exception:
+                            logger.exception("Failed to process queue event")
+            except (ConnectionError, TimeoutError):
+                logger.exception("Lost Redis event subscription. Reconnecting")
+                await asyncio.sleep(2)
 
 
 async def notify_swap(event: dict) -> None:
@@ -61,15 +64,14 @@ async def notify_swap(event: dict) -> None:
         logger.exception("Could not deliver private swap notification")
 
 
-async def notify_groups(event: dict) -> None:
+async def notify_groups(event: dict, redis: Redis) -> None:
     link = settings.queue_share_url_template.format(subject=event["subject"])
     text = (
         f"Создана новая очередь по предмету «{event['subject_name']}»\n"
         f"Очередь: {event['queue_type']}\n{link}"
     )
-    redis = Redis.from_url(settings.redis_url, decode_responses=True)
     group_ids = await redis.smembers("telegram_bot_groups")
-    await redis.aclose()
+    group_ids.update(map(str, settings.group_ids))
     for group_id in group_ids:
         try:
             await bot.send_message(group_id, text)

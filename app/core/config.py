@@ -1,7 +1,7 @@
 import json
-from typing import Union
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
+from typing import Annotated, Union
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic import PositiveInt, field_validator
 from sqlalchemy.engine import URL
 
 
@@ -31,8 +31,8 @@ class Settings(BaseSettings):
     redis_password: str = ""
     redis_max_connections: int = 50
     telegram_bot_token: str = ""
-    telegram_whitelist: list[int] = TELEGRAM_WHITELIST_IDS
-    telegram_admins: list[int] = TELEGRAM_ADMIN_IDS
+    telegram_whitelist: Annotated[list[PositiveInt], NoDecode] = TELEGRAM_WHITELIST_IDS
+    telegram_admins: Annotated[list[PositiveInt], NoDecode] = TELEGRAM_ADMIN_IDS
     queue_share_url_template: str = DEFAULT_QUEUE_SHARE_URL_TEMPLATE
 
     # CORS
@@ -40,9 +40,9 @@ class Settings(BaseSettings):
     cors_allow_credentials: bool = True
 
     # Queue limits
-    default_max_positions: int = 30
-    queue_ttl_days: int = 14
-    swap_request_ttl_hours: int = 24
+    default_max_positions: PositiveInt = 30
+    queue_ttl_days: PositiveInt = 14
+    swap_request_ttl_hours: PositiveInt = 24
 
     @field_validator("cors_origins", mode="after")
     @classmethod
@@ -61,17 +61,13 @@ class Settings(BaseSettings):
 
     @field_validator("telegram_whitelist", "telegram_admins", mode="before")
     @classmethod
-    def parse_telegram_ids(cls, value: list[int] | str) -> list[int]:
+    def parse_telegram_ids(cls, value: list[int] | str) -> list[int] | list[str]:
         if isinstance(value, str):
             value = value.strip()
             if value.startswith("["):
-                try:
-                    value = json.loads(value)
-                except json.JSONDecodeError:
-                    value = []
-            else:
-                value = value.split(",") if value else []
-        return [int(item) for item in value if str(item).strip()]
+                return json.loads(value)
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
 
     @property
     def database_url(self) -> str:

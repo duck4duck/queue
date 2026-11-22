@@ -34,7 +34,7 @@ async def create_subject(
     db: AsyncSession = Depends(get_db),
 ):
     require_admin(authenticated_tg_id)
-    """Create a new subject in the catalog (e.g. 'РњР°С‚РµРјР°С‚РёРєР°', 'Р¤РёР·РёРєР°')."""
+    """Create a new subject in the catalog (e.g. 'Математика', 'Физика')."""
     service = SubjectService(db)
     return await service.create_subject(subject)
 

@@ -21,12 +21,10 @@ class UserService:
         if self.queue_repository is None or self.swap_repository is None:
             raise RuntimeError("Redis is required to delete a user")
         for subject in await self.queue_repository.get_all_active_queue_keys():
-            position = await self.queue_repository.get_position(subject, tg_id)
-            await self.queue_repository.remove_user_from_index(tg_id, subject)
+            position = await self.queue_repository.remove_by_user(subject, tg_id)
             if position is None:
                 continue
             await self.swap_repository.cancel_all_for_user_in_queue(subject, tg_id)
-            await self.queue_repository.remove(subject, position)
             await self.queue_repository.log_event(
                 subject, "user_deleted", f"Участник #{tg_id} удален из системы"
             )

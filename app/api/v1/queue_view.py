@@ -34,7 +34,7 @@ async def create_queue(
     r: Redis = Depends(get_redis),
 ):
     require_actor(data.created_by_tg_id, authenticated_tg_id)
-    """Create a new queue under a subject (e.g. subject_name='РњР°С‚РµРјР°С‚РёРєР°', queue_type='Р›Р°Р±Р° 1')."""
+    """Create a new queue under a subject (e.g. subject_name='Математика', queue_type='Лаба 1')."""
     queue_service = QueueService(db, r)
     meta = await queue_service.create_queue(
         subject_name=data.subject_name,
@@ -233,9 +233,7 @@ async def kick_from_queue(
     """Curator removes a student from the queue."""
     require_actor(data.curator_tg_id, authenticated_tg_id)
     queue_service = QueueService(db, r)
-    await queue_service.kick(subject, data.curator_tg_id, data.target_tg_id)
-
-    queue_data = await queue_service.get_queue(subject)
+    queue_data = await queue_service.kick(subject, data.curator_tg_id, data.target_tg_id)
     event_data = {
         "event": "queue_updated",
         "subject": subject,
@@ -249,7 +247,7 @@ async def kick_from_queue(
         {
             "event": "kicked",
             "subject": subject,
-            "message": "Р’С‹ Р±С‹Р»Рё СѓРґР°Р»РµРЅС‹ РёР· РѕС‡РµСЂРµРґРё СЃРѕР·РґР°С‚РµР»РµРј.",
+            "message": "Вы были удалены из очереди создателем.",
         },
     )
 
@@ -284,7 +282,7 @@ async def advance_queue(
         {
             "event": "submission_completed",
             "subject": subject,
-            "message": "Р’Р°С€Р° СЃРґР°С‡Р° Р·Р°РІРµСЂС€РµРЅР°!",
+            "message": "Ваша сдача завершена!",
         },
     )
 
@@ -296,7 +294,7 @@ async def advance_queue(
             {
                 "event": "your_turn",
                 "subject": subject,
-                "message": "Р’С‹ СЃР»РµРґСѓСЋС‰РёР№ РІ РѕС‡РµСЂРµРґРё! РџРѕРґРѕР№РґРёС‚Рµ Рє РїСЂРµРїРѕРґР°РІР°С‚РµР»СЋ.",
+                "message": "Вы следующий в очереди! Подойдите к преподавателю.",
             },
         )
 
@@ -404,10 +402,9 @@ async def swap_in_queue(
 ):
     """Direct instant swap between positions (legacy/manual swap)."""
     queue_service = QueueService(db, r)
-    await queue_service._check_creator(subject, authenticated_tg_id)
-    await queue_service.swap(user_data.position1, user_data.position2, subject)
-
-    queue_data = await queue_service.get_queue(subject)
+    queue_data = await queue_service.swap(
+        user_data.position1, user_data.position2, subject, authenticated_tg_id,
+    )
     event_data = {
         "event": "queue_updated",
         "subject": subject,

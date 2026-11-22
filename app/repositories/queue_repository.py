@@ -1,11 +1,12 @@
 import json
 from datetime import datetime, timezone
+from uuid import uuid4
 from redis.asyncio import Redis
+from redis.exceptions import WatchError
 from app.core.config import settings
 from app.core.datetime_utils import parse_utc_datetime
-from app.core.logger import logger
 
-TWO_WEEKS_SECONDS = settings.queue_ttl_days * 24 * 60 * 60
+DEFAULT_TTL_SECONDS = settings.queue_ttl_days * 24 * 60 * 60
 MAX_HISTORY_ITEMS = 50
 
 
@@ -23,19 +24,17 @@ class QueueRepository:
     def _history_key(self, subject: str) -> str:
         return f"queue_history:{subject}"
 
+    @staticmethod
+    def get_revision(meta: dict) -> str:
+        return meta.get("revision") or meta.get("created_at", "")
+
     # ──────────────────── Queue State ────────────────────
-
-    async def queue_exists(self, subject: str) -> bool:
-        return await self.r.exists(self._queue_key(subject)) == 1
-
-    async def meta_exists(self, subject: str) -> bool:
-        return await self.r.exists(self._meta_key(subject)) == 1
 
     async def add(self, subject: str, user_id: int, position: int) -> int:
         """Atomically add a user to a free slot and update their queue index.
 
         Returns 1 on success, 0 if the slot is taken, -1 if the user is
-        already in the queue, and -2 if the queue does not exist.
+        already in the queue, -2 if the queue does not exist, and -3 if paused.
         """
         script = """
         local queue_key = KEYS[1]
@@ -47,6 +46,9 @@ class QueueRepository:
 
         if redis.call('EXISTS', meta_key) == 0 then
             return -2
+        end
+        if redis.call('HGET', meta_key, 'is_paused') == 'true' then
+            return -3
         end
 
         local users = redis.call('HGETALL', queue_key)
@@ -63,9 +65,12 @@ class QueueRepository:
         redis.call('HSET', queue_key, position, user_id)
         redis.call('SADD', user_index_key, ARGV[4])
 
-        local meta_ttl = redis.call('TTL', meta_key)
-        local ttl = meta_ttl > 0 and meta_ttl or default_ttl
-        redis.call('EXPIRE', queue_key, ttl)
+        local deadline = redis.call('PEXPIRETIME', meta_key)
+        if deadline > 0 then
+            redis.call('PEXPIREAT', queue_key, deadline)
+        else
+            redis.call('EXPIRE', queue_key, default_ttl)
+        end
         return 1
         """
         result = await self.r.eval(
@@ -76,31 +81,52 @@ class QueueRepository:
             f"user_queues:{user_id}",
             str(position),
             str(user_id),
-            str(TWO_WEEKS_SECONDS),
+            str(DEFAULT_TTL_SECONDS),
             subject,
         )
         return int(result)
 
-    async def remove(self, subject: str, position: int) -> None:
-        await self.r.hdel(self._queue_key(subject), str(position))
-
-    async def remove_by_user(self, subject: str, user_id: int) -> int | None:
-        """Remove user from queue, returns the freed position if found."""
-        key = self._queue_key(subject)
-        users = await self.r.hgetall(key)
-        for position, uid in users.items():
-            if str(user_id) == uid:
-                await self.r.hdel(key, position)
-                return int(position)
-        return None
+    async def remove_by_user(
+        self,
+        subject: str,
+        user_id: int,
+        *,
+        revision: str = "",
+        expected_head: int | None = None,
+    ) -> int | None:
+        """Remove a user and their index entry atomically."""
+        script = """
+        local revision = redis.call('HGET', KEYS[3], 'revision') or redis.call('HGET', KEYS[3], 'created_at')
+        if ARGV[3] ~= '' and revision ~= ARGV[3] then
+            return
+        end
+        local users = redis.call('HGETALL', KEYS[1])
+        local expected_head = tonumber(ARGV[4])
+        local position
+        for i = 1, #users, 2 do
+            if expected_head and tonumber(users[i]) < expected_head then
+                return
+            end
+            if users[i + 1] == ARGV[1] then
+                position = users[i]
+            end
+        end
+        if expected_head and tonumber(position) ~= expected_head then
+            return
+        end
+        redis.call('SREM', KEYS[2], ARGV[2])
+        if position then
+            redis.call('HDEL', KEYS[1], position)
+            return tonumber(position)
+        end
+        """
+        return await self.r.eval(
+            script, 3, self._queue_key(subject), f"user_queues:{user_id}", self._meta_key(subject),
+            str(user_id), subject, revision, str(expected_head) if expected_head is not None else "",
+        )
 
     async def is_position_taken(self, subject: str, position: int) -> bool:
         return await self.r.hexists(self._queue_key(subject), str(position))
-
-    async def is_user_in_queue(self, subject: str, user_id: int) -> bool:
-        key = self._queue_key(subject)
-        users = await self.r.hgetall(key)
-        return str(user_id) in users.values()
 
     async def get_position(self, subject: str, user_id: int) -> int | None:
         key = self._queue_key(subject)
@@ -122,11 +148,19 @@ class QueueRepository:
             0: user already at new_position
             -1: new_position already taken
             -2: user not in queue
+            -3: queue not found
+            -4: queue paused
         """
         script = """
         local queue_key = KEYS[1]
         local user_id = ARGV[1]
         local new_pos = ARGV[2]
+        if redis.call('EXISTS', KEYS[2]) == 0 then
+            return -3
+        end
+        if redis.call('HGET', KEYS[2], 'is_paused') == 'true' then
+            return -4
+        end
 
         local all = redis.call('hgetall', queue_key)
         local old_pos = nil
@@ -149,11 +183,14 @@ class QueueRepository:
             return -1
         end
 
-        redis.call('hdel', queue_key, old_pos)
         redis.call('hset', queue_key, new_pos, user_id)
+        redis.call('hdel', queue_key, old_pos)
         return tonumber(old_pos)
         """
-        res = await self.r.eval(script, 1, self._queue_key(subject), str(user_id), str(new_position))
+        res = await self.r.eval(
+            script, 2, self._queue_key(subject), self._meta_key(subject),
+            str(user_id), str(new_position),
+        )
         return int(res)
 
     async def get_first_in_line(self, subject: str) -> tuple[int, int] | None:
@@ -169,10 +206,14 @@ class QueueRepository:
         users = await self.r.hgetall(key)
         return {int(slot): int(uid) for slot, uid in users.items()}
 
-    async def swap(self, subject: str, pos1: int, pos2: int) -> bool:
+    async def swap(self, subject: str, pos1: int, pos2: int, *, revision: str) -> bool:
         """Atomically exchange two occupied positions if their contents are unchanged."""
         key = self._queue_key(subject)
         script = """
+        local revision = redis.call('HGET', KEYS[2], 'revision') or redis.call('HGET', KEYS[2], 'created_at')
+        if revision ~= ARGV[5] or redis.call('HGET', KEYS[2], 'is_paused') == 'true' then
+            return 0
+        end
         local first = redis.call('HGET', KEYS[1], ARGV[1])
         local second = redis.call('HGET', KEYS[1], ARGV[2])
         if not first or not second or first ~= ARGV[3] or second ~= ARGV[4] then
@@ -184,19 +225,34 @@ class QueueRepository:
         first, second = await self.r.hmget(key, str(pos1), str(pos2))
         if not first or not second:
             return False
-        return bool(await self.r.eval(script, 1, key, str(pos1), str(pos2), first, second))
+        return bool(await self.r.eval(
+            script, 2, key, self._meta_key(subject), str(pos1), str(pos2), first, second, revision,
+        ))
 
-    async def clear_participants(self, subject: str) -> None:
-        """Clears only the student participants, keeping queue metadata and history."""
-        await self.r.delete(self._queue_key(subject))
-
-    async def clear(self, subject: str) -> None:
-        pipe = self.r.pipeline(transaction=True)
-        pipe.delete(self._queue_key(subject))
-        pipe.delete(self._meta_key(subject))
-        pipe.delete(self._history_key(subject))
-        pipe.srem("active_queues", subject)
-        await pipe.execute()
+    async def clear(self, subject: str, revision: str, *, delete_queue: bool) -> bool:
+        """Clear a specific queue revision and invalidate its outstanding swaps."""
+        meta_key = self._meta_key(subject)
+        queue_key = self._queue_key(subject)
+        async with self.r.pipeline() as pipe:
+            while True:
+                try:
+                    await pipe.watch(meta_key, queue_key)
+                    if self.get_revision(await pipe.hgetall(meta_key)) != revision:
+                        return False
+                    users = await pipe.hvals(queue_key)
+                    pipe.multi()
+                    for uid in users:
+                        pipe.srem(f"user_queues:{uid}", subject)
+                    pipe.delete(queue_key)
+                    if delete_queue:
+                        pipe.delete(meta_key, self._history_key(subject))
+                        pipe.srem("active_queues", subject)
+                    else:
+                        pipe.hset(meta_key, "revision", uuid4().hex)
+                    await pipe.execute()
+                    return True
+                except WatchError:
+                    continue
 
     async def size(self, subject: str) -> int:
         return await self.r.hlen(self._queue_key(subject))
@@ -211,61 +267,90 @@ class QueueRepository:
         created_by_tg_id: int,
         auto_delete_at: str | None = None,
         ttl_seconds: int | None = None,
-    ) -> None:
+    ) -> dict | None:
         key = self._meta_key(subject)
         now = datetime.now(timezone.utc).isoformat()
-        ttl = ttl_seconds if (ttl_seconds is not None and ttl_seconds > 0) else TWO_WEEKS_SECONDS
+        ttl = ttl_seconds if ttl_seconds is not None else DEFAULT_TTL_SECONDS
         mapping = {
             "subject": subject,
             "subject_name": subject_name,
             "queue_type": queue_type,
             "created_by_tg_id": str(created_by_tg_id),
             "created_at": now,
+            "revision": uuid4().hex,
             "is_paused": "false",
         }
         if auto_delete_at:
             mapping["auto_delete_at"] = auto_delete_at
 
-        pipe = self.r.pipeline(transaction=True)
-        pipe.hset(key, mapping=mapping)
-        pipe.expire(key, ttl)
-        pipe.sadd("active_queues", subject)
-        await pipe.execute()
+        queue_key = self._queue_key(subject)
+        async with self.r.pipeline() as pipe:
+            while True:
+                try:
+                    await pipe.watch(key, queue_key)
+                    if await pipe.exists(key):
+                        return None
+                    old_users = await pipe.hvals(queue_key)
+                    pipe.multi()
+                    for uid in old_users:
+                        pipe.srem(f"user_queues:{uid}", subject)
+                    pipe.delete(queue_key, self._history_key(subject))
+                    pipe.hset(key, mapping=mapping)
+                    pipe.expire(key, ttl)
+                    pipe.sadd("active_queues", subject)
+                    await pipe.execute()
+                    return mapping
+                except WatchError:
+                    continue
 
     async def update_auto_delete(
         self,
         subject: str,
         auto_delete_at: str | None,
         ttl_seconds: int | None = None,
-    ) -> None:
+        *,
+        revision: str,
+    ) -> bool:
         key = self._meta_key(subject)
         queue_key = self._queue_key(subject)
         history_key = self._history_key(subject)
-        ttl = (
-            ttl_seconds
-            if (ttl_seconds is not None and ttl_seconds > 0)
-            else TWO_WEEKS_SECONDS
-        )
-
-        pipe = self.r.pipeline(transaction=True)
-        if auto_delete_at:
-            pipe.hset(key, "auto_delete_at", auto_delete_at)
-        else:
-            pipe.hdel(key, "auto_delete_at")
-
-        pipe.expire(key, ttl)
-        pipe.expire(queue_key, ttl)
-        pipe.expire(history_key, ttl)
-        await pipe.execute()
+        ttl = ttl_seconds if ttl_seconds is not None else DEFAULT_TTL_SECONDS
+        script = """
+        local revision = redis.call('HGET', KEYS[1], 'revision') or redis.call('HGET', KEYS[1], 'created_at')
+        if revision ~= ARGV[3] then
+            return 0
+        end
+        if ARGV[1] == '' then
+            redis.call('HDEL', KEYS[1], 'auto_delete_at')
+        else
+            redis.call('HSET', KEYS[1], 'auto_delete_at', ARGV[1])
+        end
+        for i = 1, #KEYS do
+            redis.call('EXPIRE', KEYS[i], ARGV[2])
+        end
+        return 1
+        """
+        return bool(await self.r.eval(
+            script, 3, key, queue_key, history_key, auto_delete_at or "", str(ttl), revision,
+        ))
 
     async def get_queue_meta(self, subject: str) -> dict | None:
         key = self._meta_key(subject)
         data = await self.r.hgetall(key)
         return data if data else None
 
-    async def set_queue_pause(self, subject: str, paused: bool) -> None:
-        key = self._meta_key(subject)
-        await self.r.hset(key, "is_paused", "true" if paused else "false")
+    async def set_queue_pause(self, subject: str, paused: bool, *, revision: str) -> bool:
+        script = """
+        local revision = redis.call('HGET', KEYS[1], 'revision') or redis.call('HGET', KEYS[1], 'created_at')
+        if revision ~= ARGV[2] then
+            return 0
+        end
+        redis.call('HSET', KEYS[1], 'is_paused', ARGV[1])
+        return 1
+        """
+        return bool(await self.r.eval(
+            script, 1, self._meta_key(subject), "true" if paused else "false", revision,
+        ))
 
     async def is_queue_paused(self, subject: str) -> bool:
         key = self._meta_key(subject)
@@ -273,64 +358,60 @@ class QueueRepository:
         return val == "true"
 
     async def get_all_active_queue_keys(self) -> list[str]:
-        # smembers returns a snapshot, so safe to prune dead entries
-        members = await self.r.smembers("active_queues")
-        active = []
-        for subject in members:
-            if await self.r.exists(self._queue_key(subject)) or await self.r.exists(
-                self._meta_key(subject)
-            ):
-                active.append(subject)
-            else:
-                await self.r.srem("active_queues", subject)
-        return active
+        return list(await self.r.smembers("active_queues"))
 
     async def cleanup_expired_queues(self) -> list[str]:
         """Checks all active queues for expiration, deletes expired ones, and returns their keys."""
         members = await self.r.smembers("active_queues")
         deleted = []
-        now = datetime.now(timezone.utc)
         for subject in members:
-            has_queue = await self.r.exists(self._queue_key(subject))
-            has_meta = await self.r.exists(self._meta_key(subject))
-            if not has_queue and not has_meta:
-                await self.r.srem("active_queues", subject)
-                deleted.append(subject)
-                continue
-
-            meta = await self.get_queue_meta(subject)
-            if not meta:
-                await self.clear(subject)
-                deleted.append(subject)
-                continue
-
-            auto_delete_at = meta.get("auto_delete_at")
-            if auto_delete_at:
-                exp_dt = parse_utc_datetime(auto_delete_at)
-                if exp_dt and now >= exp_dt:
-                    queue = await self.get_queue(subject)
-                    for uid in queue.values():
-                        await self.remove_user_from_index(uid, subject)
-                    await self.clear(subject)
+            meta_key = self._meta_key(subject)
+            queue_key = self._queue_key(subject)
+            async with self.r.pipeline() as pipe:
+                try:
+                    await pipe.watch(meta_key, queue_key, "active_queues")
+                    if not await pipe.sismember("active_queues", subject):
+                        continue
+                    meta = await pipe.hgetall(meta_key)
+                    deadline = parse_utc_datetime(meta.get("auto_delete_at"))
+                    if meta.get("created_at") and (deadline is None or deadline > datetime.now(timezone.utc)):
+                        continue
+                    users = await pipe.hvals(queue_key)
+                    pipe.multi()
+                    for uid in users:
+                        pipe.srem(f"user_queues:{uid}", subject)
+                    pipe.delete(meta_key, queue_key, self._history_key(subject))
+                    pipe.srem("active_queues", subject)
+                    await pipe.execute()
                     deleted.append(subject)
+                except WatchError:
+                    continue
         return deleted
 
     # ──────────────────── User Participation Index ────────────────────
 
-    async def add_user_to_index(self, user_id: int, subject: str) -> None:
-        await self.r.sadd(f"user_queues:{user_id}", subject)
-
-    async def remove_user_from_index(self, user_id: int, subject: str) -> None:
-        await self.r.srem(f"user_queues:{user_id}", subject)
-
     async def get_user_queues(self, user_id: int) -> list[str]:
-        members = await self.r.smembers(f"user_queues:{user_id}")
+        user_key = f"user_queues:{user_id}"
+        members = await self.r.smembers(user_key)
         active = []
         for subject in members:
-            if await self.r.exists(self._queue_key(subject)):
+            script = """
+            if redis.call('EXISTS', KEYS[2]) == 1 then
+                local users = redis.call('HVALS', KEYS[1])
+                for i = 1, #users do
+                    if users[i] == ARGV[1] then
+                        return 1
+                    end
+                end
+            end
+            redis.call('SREM', KEYS[3], ARGV[2])
+            return 0
+            """
+            if await self.r.eval(
+                script, 3, self._queue_key(subject), self._meta_key(subject), user_key,
+                str(user_id), subject,
+            ):
                 active.append(subject)
-            else:
-                await self.r.srem(f"user_queues:{user_id}", subject)
         return active
 
     # ──────────────────── Activity History Log ────────────────────
@@ -344,13 +425,23 @@ class QueueRepository:
             "text": text,
         }, ensure_ascii=False)
 
-        pipe = self.r.pipeline(transaction=True)
-        pipe.lpush(key, entry)
-        pipe.ltrim(key, 0, MAX_HISTORY_ITEMS - 1)
-        meta_ttl = await self.r.ttl(self._meta_key(subject))
-        ttl = meta_ttl if (meta_ttl and meta_ttl > 0) else TWO_WEEKS_SECONDS
-        pipe.expire(key, ttl)
-        await pipe.execute()
+        script = """
+        local deadline = redis.call('PEXPIRETIME', KEYS[2])
+        if deadline == -2 then
+            return
+        end
+        redis.call('LPUSH', KEYS[1], ARGV[1])
+        redis.call('LTRIM', KEYS[1], 0, ARGV[2])
+        if deadline > 0 then
+            redis.call('PEXPIREAT', KEYS[1], deadline)
+        else
+            redis.call('EXPIRE', KEYS[1], ARGV[3])
+        end
+        """
+        await self.r.eval(
+            script, 2, key, self._meta_key(subject), entry,
+            str(MAX_HISTORY_ITEMS - 1), str(DEFAULT_TTL_SECONDS),
+        )
 
     async def get_history(self, subject: str, limit: int = 20) -> list[dict]:
         """Fetch latest activity log entries for the queue."""

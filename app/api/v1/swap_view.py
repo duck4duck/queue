@@ -40,7 +40,7 @@ async def create_swap_request(
         {
             "event": "swap_request_created",
             "subject": subject,
-            "data": result_json,
+            "data": result_json | {"message": "", "response_message": ""},
         },
     )
 
@@ -51,7 +51,7 @@ async def create_swap_request(
         {
             "event": "incoming_swap_request",
             "data": result_json,
-            "message": f"{result.from_name or 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ'} РїСЂРµРґР»Р°РіР°РµС‚ РѕР±РјРµРЅ (РјРµСЃС‚Рѕ {result.from_position} в†” {result.to_position}){note}",
+            "message": f"{result.from_name or 'Пользователь'} предлагает обмен (место {result.from_position} ↔ {result.to_position}){note}",
         },
     )
     await r.publish("queue_events", json.dumps({
@@ -128,7 +128,7 @@ async def accept_swap_request(
     event_swap = {
         "event": "swap_request_accepted",
         "subject": result.subject,
-        "swap": result_json,
+        "swap": result_json | {"message": "", "response_message": ""},
         "data": queue_json,
     }
     await manager.broadcast_room_and_all(result.subject, event_swap)
@@ -140,7 +140,7 @@ async def accept_swap_request(
             "event": "swap_accepted",
             "subject": result.subject,
             "data": result_json,
-            "message": f"{result.to_name or 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ'} РїСЂРёРЅСЏР» РІР°С€ Р·Р°РїСЂРѕСЃ РЅР° РѕР±РјРµРЅ!",
+            "message": f"{result.to_name or 'Пользователь'} принял ваш запрос на обмен!",
         },
     )
 
@@ -173,7 +173,7 @@ async def reject_swap_request(
         {
             "event": "swap_request_rejected",
             "subject": result.subject,
-            "data": result_json,
+            "data": result_json | {"message": "", "response_message": ""},
         },
     )
 
@@ -184,7 +184,7 @@ async def reject_swap_request(
             "event": "swap_rejected",
             "subject": result.subject,
             "data": result_json,
-            "message": f"{result.to_name or 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ'} РѕС‚РєР»РѕРЅРёР» РІР°С€ Р·Р°РїСЂРѕСЃ РЅР° РѕР±РјРµРЅ",
+            "message": f"{result.to_name or 'Пользователь'} отклонил ваш запрос на обмен",
         },
     )
 
@@ -215,7 +215,7 @@ async def cancel_swap_request(
         {
             "event": "swap_request_cancelled",
             "subject": result.subject,
-            "data": result_json,
+            "data": result_json | {"message": "", "response_message": ""},
         },
     )
 
@@ -226,7 +226,7 @@ async def cancel_swap_request(
             "event": "swap_cancelled",
             "subject": result.subject,
             "data": result_json,
-            "message": "Р—Р°РїСЂРѕСЃ РЅР° РѕР±РјРµРЅ Р±С‹Р» РѕС‚РѕР·РІР°РЅ РѕС‚РїСЂР°РІРёС‚РµР»РµРј.",
+            "message": "Запрос на обмен был отозван отправителем.",
         },
     )
 

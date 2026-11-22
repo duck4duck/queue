@@ -1,6 +1,5 @@
 import json
 from fastapi import WebSocket, APIRouter, WebSocketDisconnect
-from redis.asyncio import Redis
 from app.api.ws_manager import manager
 from app.db.postgres.database import AsyncSessionLocal
 from app.db.redis.redis_client import get_redis_client
@@ -29,7 +28,7 @@ async def _handle_ping_pong(websocket: WebSocket, raw: str) -> None:
 @router.websocket("/ws/queue/{subject}")
 async def queue_websocket(websocket: WebSocket, subject: str):
     """Queue room WebSocket: broadcasts real-time queue changes to everyone viewing this queue."""
-    if not await _authenticate_websocket(websocket):
+    if await _authenticate_websocket(websocket) is None:
         return
     client_host = websocket.client.host if websocket.client else "unknown"
     await manager.connect(websocket, subject)
@@ -56,9 +55,9 @@ async def queue_websocket(websocket: WebSocket, subject: str):
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected from queue '{subject}' ({client_host})")
-        manager.disconnect(websocket, subject)
     except Exception as e:
         logger.error(f"WebSocket error for queue '{subject}' ({client_host}): {e}")
+    finally:
         manager.disconnect(websocket, subject)
 
 
@@ -87,9 +86,9 @@ async def user_websocket(websocket: WebSocket, tg_id: int):
 
     except WebSocketDisconnect:
         logger.info(f"Personal WebSocket disconnected for user tg_id={tg_id} ({client_host})")
-        manager.disconnect_user(websocket, tg_id)
     except Exception as e:
         logger.error(f"Personal WebSocket error for user tg_id={tg_id} ({client_host}): {e}")
+    finally:
         manager.disconnect_user(websocket, tg_id)
 
 

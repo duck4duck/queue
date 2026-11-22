@@ -110,6 +110,13 @@ class QueuePaused(QueueException):
         super().__init__(msg)
 
 
+class InvalidQueueExpiration(QueueException):
+    status_code: int = 400
+
+    def __init__(self, msg: str = "Укажите будущую дату автоудаления в формате ISO 8601!"):
+        super().__init__(msg)
+
+
 # ──────────────────── Swap Request Exceptions ────────────────────
 
 class SwapRequestException(AppException):

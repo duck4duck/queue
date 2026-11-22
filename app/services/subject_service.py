@@ -31,10 +31,9 @@ class SubjectService:
         return SubjectResponse.model_validate(subject)
 
     async def create_subject(self, subject_data: Subject) -> SubjectResponse:
-        existing = await self.repository.get_by_name(subject_data.name)
-        if existing:
-            raise SubjectAlreadyExists(f"Предмет '{subject_data.name}' уже существует!")
         subject = await self.repository.create_subject(subject_data=subject_data)
+        if subject is None:
+            raise SubjectAlreadyExists(f"Предмет '{subject_data.name}' уже существует!")
         return SubjectResponse.model_validate(subject)
 
     async def delete_subject(self, id: int) -> dict:

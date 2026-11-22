@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.subject import Subject
 from app.schemas.subject import Subject as SubjectCreate
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 
 class SubjectRepository:
@@ -17,7 +17,7 @@ class SubjectRepository:
         stmt = select(Subject)
         if search:
             stmt = stmt.where(Subject.name.ilike(f"%{search}%"))
-        stmt = stmt.offset(skip).limit(limit)
+        stmt = stmt.order_by(Subject.id).offset(skip).limit(limit)
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
@@ -27,11 +27,16 @@ class SubjectRepository:
         return result.scalar_one_or_none()
 
     async def get_by_name(self, name: str) -> Subject | None:
-        stmt = select(Subject).where(Subject.name == name)
+        stmt = select(Subject).where(Subject.name == name).order_by(Subject.id).limit(1)
         result = await self.db.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def create_subject(self, subject_data: SubjectCreate) -> Subject:
+    async def create_subject(self, subject_data: SubjectCreate) -> Subject | None:
+        # Serialize inserts by name without changing existing subject IDs.
+        await self.db.execute(select(func.pg_advisory_xact_lock(func.hashtext(subject_data.name))))
+        if await self.get_by_name(subject_data.name) is not None:
+            await self.db.rollback()
+            return None
         db_subject = Subject(name=subject_data.name)
         self.db.add(db_subject)
         await self.db.commit()

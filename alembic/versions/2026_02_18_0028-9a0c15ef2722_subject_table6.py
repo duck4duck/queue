@@ -7,7 +7,7 @@ Create Date: 2026-02-18 00:28:01.258368
 """
 from typing import Sequence, Union
 
-from alembic import op
+from alembic import context, op
 import sqlalchemy as sa
 
 
@@ -21,7 +21,7 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Upgrade schema."""
     bind = op.get_bind()
-    if not sa.inspect(bind).has_table('users'):
+    if not context.is_offline_mode() and not sa.inspect(bind).has_table('users'):
         op.create_table('users',
             sa.Column('id', sa.Integer(), nullable=False),
             sa.Column('name', sa.String(), nullable=False),

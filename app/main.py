@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -18,8 +17,6 @@ from app.api.ws_manager import manager
 from app.api.router import main_router
 from app.schemas.exception import AppException
 from app.api.v1.exception_handler import app_exception_handler
-from app.api.auth import verify_telegram_init_data
-from fastapi.responses import JSONResponse
 
 
 async def queue_expiration_loop():
@@ -47,17 +44,15 @@ async def lifespan(app: FastAPI):
     setup_logger(settings.log_level)
     logger.info(f"Starting {settings.app_name} v{settings.app_version}...")
     cleanup_task = asyncio.create_task(queue_expiration_loop())
-    yield
-    # Shutdown
-    logger.info("Shutting down application...")
-    cleanup_task.cancel()
     try:
-        await cleanup_task
-    except asyncio.CancelledError:
-        pass
-    await close_redis()
-    await engine.dispose()
-    logger.info("Application successfully stopped.")
+        yield
+    finally:
+        logger.info("Shutting down application...")
+        cleanup_task.cancel()
+        await asyncio.gather(cleanup_task, return_exceptions=True)
+        await close_redis()
+        await engine.dispose()
+        logger.info("Application successfully stopped.")
 
 
 app = FastAPI(
@@ -77,25 +72,6 @@ app.add_middleware(
 
 
 EXCLUDE_PATHS = {"/health", "/docs", "/openapi.json"}
-
-
-@app.middleware("http")
-async def telegram_whitelist_middleware(request: Request, call_next):
-    """Require signed Telegram identity for every application API request."""
-    if request.url.path not in EXCLUDE_PATHS and (
-        request.url.path.startswith("/api/") or request.url.path.startswith("/queue/")
-    ):
-        init_data = request.headers.get("X-Telegram-Init-Data")
-        if not settings.telegram_bot_token or not init_data:
-            return JSONResponse(status_code=401, content={"detail": "Telegram authentication is required"})
-        try:
-            tg_id = verify_telegram_init_data(init_data, settings.telegram_bot_token)
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-            return JSONResponse(status_code=401, content={"detail": "Invalid or expired Telegram authentication data"})
-        if settings.telegram_whitelist and tg_id not in settings.telegram_whitelist:
-            return JSONResponse(status_code=403, content={"detail": "Telegram user is not in the whitelist"})
-        request.state.tg_id = tg_id
-    return await call_next(request)
 
 
 # ──────────────────── Request Logging Middleware ────────────────────
@@ -129,7 +105,7 @@ async def log_requests_middleware(request: Request, call_next):
             f"({process_time_ms:.2f}ms) | IP: {client_ip}: {exc}",
             exc_info=True,
         )
-        raise exc
+        raise
 
 # ──────────────────── Routers ────────────────────
 app.include_router(main_router)
@@ -163,16 +139,19 @@ async def health_check(response: Response):
     redis_status = "ok"
 
     try:
-        async with AsyncSessionLocal() as session:
+        async with asyncio.timeout(2), AsyncSessionLocal() as session:
             await session.execute(text("SELECT 1"))
-    except Exception as e:
-        db_status = f"error: {str(e)}"
+    except Exception:
+        db_status = "error"
+        logger.exception("PostgreSQL health check failed")
 
     try:
         r = get_redis_client()
-        await r.ping()
-    except Exception as e:
-        redis_status = f"error: {str(e)}"
+        async with asyncio.timeout(2):
+            await r.ping()
+    except Exception:
+        redis_status = "error"
+        logger.exception("Redis health check failed")
 
     is_healthy = db_status == "ok" and redis_status == "ok"
     if not is_healthy:

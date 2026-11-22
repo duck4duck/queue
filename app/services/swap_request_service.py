@@ -9,7 +9,6 @@ from app.schemas.exception import (
     UserNotFound,
     UserNotInQueue,
     SwapRequestNotFound,
-    SwapRequestAlreadyExists,
     SwapRequestExpired,
     InvalidPosition,
     PositionEmpty,
@@ -40,9 +39,6 @@ class SwapRequestService:
         if from_user is None:
             raise UserNotFound("Пользователь не найден!")
 
-        if not await self.queue_repo.is_user_in_queue(subject, from_tg_id):
-            raise UserNotInQueue("Вы не состоите в этой очереди!")
-
         from_position = await self.queue_repo.get_position(subject, from_tg_id)
         if from_position is None:
             raise UserNotInQueue("Не удалось определить вашу позицию в очереди!")
@@ -63,11 +59,6 @@ class SwapRequestService:
         if to_user is None:
             raise UserNotFound("Пользователь на целевой позиции не найден!")
 
-        if await self.swap_repo.has_pending_outgoing(subject, from_tg_id):
-            raise SwapRequestAlreadyExists(
-                "У вас уже есть активный запрос на обмен в этой очереди! Дождитесь ответа или отмените его."
-            )
-
         request_id = await self.swap_repo.create(
             subject=subject,
             from_tg_id=from_tg_id,
@@ -79,7 +70,7 @@ class SwapRequestService:
 
         logger.info(
             f"Swap proposal created in '{subject}': {from_user.name} (#{from_position}) -> "
-            f"{to_user.name} (#{to_position}). Msg: '{message}'"
+            f"{to_user.name} (#{to_position})"
         )
 
         created_data = await self.swap_repo.get(request_id)
@@ -115,34 +106,12 @@ class SwapRequestService:
             raise Forbidden("Только адресат запроса может принять обмен!")
 
         subject = data["subject"]
-        if await self.queue_repo.is_queue_paused(subject):
-            raise QueuePaused("Очередь приостановлена! Обмен временно недоступен.")
-
         from_tg_id = int(data["from_tg_id"])
         from_position = int(data["from_position"])
         to_position = int(data["to_position"])
 
-        # Validate users are still at their respective positions
-        current_from_pos = await self.queue_repo.get_position(subject, from_tg_id)
-        current_to_pos = await self.queue_repo.get_position(subject, to_tg_id)
-
-        if current_from_pos != from_position or current_to_pos != to_position:
-            await self.swap_repo.update_status(request_id, "expired")
-            logger.warning(
-                f"Swap request {request_id} expired: positions changed (expected #{from_position}/#{to_position}, "
-                f"found #{current_from_pos}/#{current_to_pos})"
-            )
-            raise SwapRequestExpired(
-                "Позиции участников изменились с момента отправки запроса. Запрос аннулирован."
-            )
-
-        # Execute the swap
-        if not await self.queue_repo.swap(subject, from_position, to_position):
-            await self.swap_repo.update_status(request_id, "expired")
-            raise SwapRequestExpired(
-                "Позиции изменились. Запрос на обмен больше не актуален."
-            )
-        await self.swap_repo.update_status(request_id, "accepted", message)
+        if await self.swap_repo.update_status(request_id, "accepted", message) != "accepted":
+            raise SwapRequestExpired()
 
         from_user = await self.user_service.get_user_by_tg_id(from_tg_id)
         to_user = await self.user_service.get_user_by_tg_id(to_tg_id)
@@ -186,13 +155,14 @@ class SwapRequestService:
         if tg_id != to_tg_id:
             raise Forbidden("Только адресат запроса может отклонить обмен!")
 
-        await self.swap_repo.update_status(request_id, "rejected", message)
+        if await self.swap_repo.update_status(request_id, "rejected", message) != "rejected":
+            raise SwapRequestExpired()
 
         from_tg_id = int(data["from_tg_id"])
         from_user = await self.user_service.get_user_by_tg_id(from_tg_id)
         to_user = await self.user_service.get_user_by_tg_id(to_tg_id)
 
-        logger.info(f"Swap request {request_id} rejected by tg_id={tg_id}. Msg: '{message}'")
+        logger.info(f"Swap request {request_id} rejected by tg_id={tg_id}")
 
         return SwapRequestInfo(
             id=request_id,
@@ -224,7 +194,8 @@ class SwapRequestService:
         if tg_id != from_tg_id:
             raise Forbidden("Только отправитель может отменить свой запрос на обмен!")
 
-        await self.swap_repo.update_status(request_id, "cancelled")
+        if await self.swap_repo.update_status(request_id, "cancelled") != "cancelled":
+            raise SwapRequestExpired()
         logger.info(f"Swap request {request_id} cancelled by sender tg_id={tg_id}")
 
         return SwapRequestInfo(

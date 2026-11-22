@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from math import ceil
 from app.repositories.queue_repository import QueueRepository
 from app.repositories.swap_request_repository import SwapRequestRepository
 from app.repositories.subject_repository import SubjectRepository
@@ -15,6 +16,7 @@ from app.schemas.exception import (
     PositionEmpty,
     UserNotFound,
     InvalidPosition,
+    InvalidQueueExpiration,
     Forbidden,
     QueueAlreadyExists,
     QueueNotFound,
@@ -48,12 +50,10 @@ class QueueService:
         if not auto_delete_at:
             return None, None
         exp_dt = parse_utc_datetime(auto_delete_at)
-        if exp_dt is None:
-            logger.warning(f"Invalid auto_delete_at format '{auto_delete_at}'")
-            return None, None
-        diff = int((exp_dt - datetime.now(timezone.utc)).total_seconds())
-        ttl_seconds = diff if diff > 0 else 30
-        return auto_delete_at, ttl_seconds
+        now = datetime.now(timezone.utc)
+        if exp_dt is None or exp_dt <= now:
+            raise InvalidQueueExpiration()
+        return auto_delete_at, ceil((exp_dt - now).total_seconds())
 
     def _build_meta_info(
         self,
@@ -110,12 +110,9 @@ class QueueService:
 
         subject_key = f"{subject_name}:{queue_type}"
 
-        if await self.queue_repo.meta_exists(subject_key):
-            raise QueueAlreadyExists(f"Очередь '{subject_key}' уже создана!")
-
         auto_delete_at, ttl_seconds = self._parse_auto_delete_ttl(auto_delete_at)
 
-        await self.queue_repo.create_queue_meta(
+        meta = await self.queue_repo.create_queue_meta(
             subject=subject_key,
             subject_name=subject_name,
             queue_type=queue_type,
@@ -123,6 +120,8 @@ class QueueService:
             auto_delete_at=auto_delete_at,
             ttl_seconds=ttl_seconds,
         )
+        if meta is None:
+            raise QueueAlreadyExists(f"Очередь '{subject_key}' уже создана!")
 
         await self.queue_repo.log_event(
             subject_key,
@@ -134,7 +133,6 @@ class QueueService:
             f"auto_delete_at={auto_delete_at}"
         )
 
-        meta = await self.queue_repo.get_queue_meta(subject_key)
         return self._build_meta_info(
             subject=subject_key,
             meta=meta,
@@ -148,7 +146,7 @@ class QueueService:
         if user is None:
             raise UserNotFound("Пользователь не найден!")
         meta = await self.queue_repo.get_queue_meta(subject)
-        if meta is None:
+        if meta is None or not meta.get("created_at"):
             raise QueueNotFound("Очередь не найдена!")
         created_by = int(meta.get("created_by_tg_id", 0))
         if created_by != user_tg_id:
@@ -159,24 +157,22 @@ class QueueService:
         """Only the creator can delete the entire queue."""
         meta, user = await self._check_creator(subject, creator_tg_id)
 
-        queue = await self.queue_repo.get_queue(subject)
-        for uid in queue.values():
-            await self.swap_repo.cancel_all_for_user_in_queue(subject, uid)
-            await self.queue_repo.remove_user_from_index(uid, subject)
+        if not await self.queue_repo.clear(
+            subject, self.queue_repo.get_revision(meta), delete_queue=True,
+        ):
+            raise QueueNotFound()
 
-        await self.queue_repo.clear(subject)
         logger.info(f"Queue deleted: '{subject}' by creator {user.name} (tg_id={creator_tg_id})")
 
     async def clear_queue(self, subject: str, creator_tg_id: int) -> QueueResponse:
         """Only the creator can clear all students from the queue."""
         meta, user = await self._check_creator(subject, creator_tg_id)
 
-        queue = await self.queue_repo.get_queue(subject)
-        for uid in queue.values():
-            await self.swap_repo.cancel_all_for_user_in_queue(subject, uid)
-            await self.queue_repo.remove_user_from_index(uid, subject)
+        if not await self.queue_repo.clear(
+            subject, self.queue_repo.get_revision(meta), delete_queue=False,
+        ):
+            raise QueueNotFound()
 
-        await self.queue_repo.clear_participants(subject)
         await self.queue_repo.log_event(subject, "clear", f"Очередь очищена создателем {user.name}")
         logger.info(f"Queue '{subject}' cleared by creator {user.name}")
 
@@ -188,7 +184,8 @@ class QueueService:
         """Only the creator can pause or resume queue."""
         meta, user = await self._check_creator(subject, creator_tg_id)
 
-        await self.queue_repo.set_queue_pause(subject, paused)
+        if not await self.queue_repo.set_queue_pause(subject, paused, revision=self.queue_repo.get_revision(meta)):
+            raise QueueNotFound()
         status_text = "Очередь приостановлена" if paused else "Очередь возобновлена"
         await self.queue_repo.log_event(
             subject, "pause" if paused else "resume", f"{status_text} создателем {user.name}"
@@ -214,7 +211,10 @@ class QueueService:
         meta, user = await self._check_creator(subject, creator_tg_id)
 
         auto_delete_at, ttl_seconds = self._parse_auto_delete_ttl(auto_delete_at)
-        await self.queue_repo.update_auto_delete(subject, auto_delete_at, ttl_seconds)
+        if not await self.queue_repo.update_auto_delete(
+            subject, auto_delete_at, ttl_seconds, revision=self.queue_repo.get_revision(meta),
+        ):
+            raise QueueNotFound()
 
         event_text = (
             f"Автоудаление очереди установлено на {auto_delete_at}"
@@ -243,18 +243,18 @@ class QueueService:
     ) -> QueueListResponse:
         """List active queues with optional filtering and search."""
         keys = await self.queue_repo.get_all_active_queue_keys()
-        queues = []
+        matching = []
         now = datetime.now(timezone.utc)
+        query = search.lower() if search else None
         for subject in keys:
             meta = await self.queue_repo.get_queue_meta(subject)
-            if meta is None:
+            if not meta or not meta.get("created_at"):
                 continue
 
             auto_del = meta.get("auto_delete_at")
             if auto_del:
                 exp_dt = parse_utc_datetime(auto_del)
                 if exp_dt and now >= exp_dt:
-                    await self.queue_repo.clear(subject)
                     continue
 
             subj_name = meta.get("subject_name", "")
@@ -266,22 +266,21 @@ class QueueService:
                 continue
             if is_paused is not None and paused != is_paused:
                 continue
-            if search:
-                query = search.lower()
-                if query not in subject.lower() and query not in subj_name.lower() and query not in q_type.lower():
-                    continue
+            if query and all(query not in value.lower() for value in (subject, subj_name, q_type)):
+                continue
+            matching.append((subject, meta))
 
-            taken = await self.queue_repo.size(subject)
-            created_by_tg_id = int(meta.get("created_by_tg_id", 0))
-            creator = await self.user_service.get_user_by_tg_id(created_by_tg_id)
-
+        creator_ids = {int(meta.get("created_by_tg_id", 0)) for _, meta in matching}
+        creators = await self.user_service.get_by_tg_ids(list(creator_ids)) if creator_ids else []
+        creator_names = {creator.tg_id: creator.name for creator in creators}
+        queues = []
+        for subject, meta in matching:
             queues.append(
                 self._build_meta_info(
                     subject=subject,
                     meta=meta,
-                    creator_name=creator.name if creator else None,
-                    taken_positions=taken,
-                    is_paused=paused,
+                    creator_name=creator_names.get(int(meta.get("created_by_tg_id", 0))),
+                    taken_positions=await self.queue_repo.size(subject),
                 )
             )
 
@@ -293,9 +292,6 @@ class QueueService:
     # ──────────────────── Participation (Join / Leave) ────────────────────
 
     async def join(self, subject: str, user_id: int, position: int) -> QueueResponse:
-        if await self.queue_repo.is_queue_paused(subject):
-            raise QueuePaused("Очередь приостановлена! Запись временно закрыта.")
-
         user = await self.user_service.get_user_by_tg_id(user_id)
         if user is None:
             raise UserNotFound("Пользователь не найден!")
@@ -304,6 +300,8 @@ class QueueService:
             raise InvalidPosition(f"Некорректный номер позиции. Число должно быть от 1 до {self.max_positions}!")
 
         add_result = await self.queue_repo.add(subject, user_id, position)
+        if add_result == -3:
+            raise QueuePaused("Очередь приостановлена! Запись временно закрыта.")
         if add_result == -2:
             raise QueueNotFound("Очередь не найдена!")
         if add_result == -1:
@@ -321,12 +319,11 @@ class QueueService:
         if user is None:
             raise UserNotFound("Пользователь не найден!")
 
-        if not await self.queue_repo.is_user_in_queue(subject, user_id):
+        freed_pos = await self.queue_repo.remove_by_user(subject, user_id)
+        if freed_pos is None:
             raise UserNotInQueue("Вы не состоите в этой очереди!")
 
         await self.swap_repo.cancel_all_for_user_in_queue(subject, user_id)
-        freed_pos = await self.queue_repo.remove_by_user(subject, user_id)
-        await self.queue_repo.remove_user_from_index(user_id, subject)
 
         await self.queue_repo.log_event(subject, "leave", f"{user.name} освободил(а) место #{freed_pos}")
         logger.info(f"User {user.name} (tg_id={user_id}) left '{subject}' (was pos #{freed_pos})")
@@ -334,9 +331,6 @@ class QueueService:
         return await self.get_queue(subject)
 
     async def move(self, subject: str, user_id: int, position: int) -> QueueResponse:
-        if await self.queue_repo.is_queue_paused(subject):
-            raise QueuePaused("Очередь приостановлена! Смена мест временно закрыта.")
-
         user = await self.user_service.get_user_by_tg_id(user_id)
         if user is None:
             raise UserNotFound("Пользователь не найден!")
@@ -345,6 +339,10 @@ class QueueService:
             raise InvalidPosition(f"Некорректный номер позиции. Число должно быть от 1 до {self.max_positions}!")
 
         result = await self.queue_repo.move_user(subject, user_id, position)
+        if result == -4:
+            raise QueuePaused("Очередь приостановлена! Смена мест временно закрыта.")
+        if result == -3:
+            raise QueueNotFound()
         if result == -1:
             raise PositionTaken(f"Позиция {position} уже занята другим участником!")
         if result == -2:
@@ -373,12 +371,13 @@ class QueueService:
         target = await self.user_service.get_user_by_tg_id(target_tg_id)
         target_name = target.name if target else f"ID {target_tg_id}"
 
-        if not await self.queue_repo.is_user_in_queue(subject, target_tg_id):
+        freed_pos = await self.queue_repo.remove_by_user(
+            subject, target_tg_id, revision=self.queue_repo.get_revision(meta),
+        )
+        if freed_pos is None:
             raise UserNotInQueue("Целевой пользователь не состоит в этой очереди!")
 
         await self.swap_repo.cancel_all_for_user_in_queue(subject, target_tg_id)
-        freed_pos = await self.queue_repo.remove_by_user(subject, target_tg_id)
-        await self.queue_repo.remove_user_from_index(target_tg_id, subject)
 
         await self.queue_repo.log_event(
             subject,
@@ -402,9 +401,11 @@ class QueueService:
         completed_user = await self.user_service.get_user_by_tg_id(user_id)
         user_name = completed_user.name if completed_user else f"ID {user_id}"
 
+        if await self.queue_repo.remove_by_user(
+            subject, user_id, revision=self.queue_repo.get_revision(meta), expected_head=pos,
+        ) is None:
+            raise PositionEmpty("Состав очереди изменился. Обновите очередь и повторите действие.")
         await self.swap_repo.cancel_all_for_user_in_queue(subject, user_id)
-        await self.queue_repo.remove_by_user(subject, user_id)
-        await self.queue_repo.remove_user_from_index(user_id, subject)
 
         await self.queue_repo.log_event(
             subject,
@@ -420,17 +421,16 @@ class QueueService:
 
     async def get_queue(self, subject: str) -> QueueResponse:
         meta = await self.queue_repo.get_queue_meta(subject)
-        if meta is None:
+        if not meta or not meta.get("created_at"):
             raise QueueNotFound("Очередь не найдена!")
 
         if meta.get("auto_delete_at"):
             exp_dt = parse_utc_datetime(meta["auto_delete_at"])
             if exp_dt and datetime.now(timezone.utc) >= exp_dt:
-                await self.queue_repo.clear(subject)
-                raise QueueNotFound("Очередь была автоматически удалена по истечении срока действия!")
+                raise QueueNotFound("Срок действия очереди истёк!")
 
         queue = await self.queue_repo.get_queue(subject)
-        is_paused = await self.queue_repo.is_queue_paused(subject)
+        is_paused = meta.get("is_paused") == "true"
 
         if not queue:
             positions = [
@@ -482,19 +482,20 @@ class QueueService:
         now = datetime.now(timezone.utc)
         for subject in subjects:
             meta = await self.queue_repo.get_queue_meta(subject)
-            if not meta:
+            if not meta or not meta.get("created_at"):
                 continue
 
             auto_del = meta.get("auto_delete_at")
             if auto_del:
                 exp_dt = parse_utc_datetime(auto_del)
                 if exp_dt and now >= exp_dt:
-                    await self.queue_repo.clear(subject)
                     continue
 
             taken = await self.queue_repo.size(subject)
             is_paused = (meta.get("is_paused") == "true") if meta else False
             my_pos = await self.queue_repo.get_position(subject, tg_id)
+            if my_pos is None:
+                continue
             result.append(
                 self._build_meta_info(
                     subject=subject,
@@ -511,7 +512,7 @@ class QueueService:
     async def get_my_position(self, subject: str, tg_id: int) -> MyPositionResponse:
         """Calculate how many people are in front of the student and estimate wait time."""
         queue = await self.queue_repo.get_queue(subject)
-        my_pos = await self.queue_repo.get_position(subject, tg_id)
+        my_pos = next((pos for pos, user_id in queue.items() if user_id == tg_id), None)
 
         if my_pos is None:
             return MyPositionResponse(in_queue=False, subject=subject)
@@ -534,11 +535,11 @@ class QueueService:
 
     async def get_swap_candidates(self, subject: str, tg_id: int) -> list[SwapCandidate]:
         """Get all participants available for swapping (both ahead and behind)."""
-        my_pos = await self.queue_repo.get_position(subject, tg_id)
+        queue = await self.queue_repo.get_queue(subject)
+        my_pos = next((pos for pos, user_id in queue.items() if user_id == tg_id), None)
         if my_pos is None:
             raise UserNotInQueue("Вы не состоите в этой очереди!")
 
-        queue = await self.queue_repo.get_queue(subject)
         candidates_positions = {pos: uid for pos, uid in queue.items() if pos != my_pos}
 
         if not candidates_positions:
@@ -594,8 +595,9 @@ class QueueService:
 
     # ──────────────────── Direct Swap (Legacy) ────────────────────
 
-    async def swap(self, pos1: int, pos2: int, subject: str) -> QueueResponse:
-        if await self.queue_repo.is_queue_paused(subject):
+    async def swap(self, pos1: int, pos2: int, subject: str, creator_tg_id: int) -> QueueResponse:
+        meta, _ = await self._check_creator(subject, creator_tg_id)
+        if meta.get("is_paused") == "true":
             raise QueuePaused("Очередь приостановлена! Обмен временно закрыт.")
 
         if pos1 == pos2:
@@ -615,7 +617,9 @@ class QueueService:
         if not await self.queue_repo.is_position_taken(subject, pos2):
             raise UserNotInQueue(f"На позиции {pos2} никого нет!")
 
-        if not await self.queue_repo.swap(subject, pos1, pos2):
+        if not await self.queue_repo.swap(
+            subject, pos1, pos2, revision=self.queue_repo.get_revision(meta),
+        ):
             raise PositionEmpty("Позиции изменились. Обновите очередь и повторите обмен.")
         await self.queue_repo.log_event(subject, "swap", f"Обмен местами: #{pos1} ↔ #{pos2}")
         logger.info(f"Direct swap in '{subject}': #{pos1} ↔ #{pos2}")

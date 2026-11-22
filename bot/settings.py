@@ -1,5 +1,6 @@
 import json
 import os
+from urllib.parse import quote
 
 
 def _int_list(value: str) -> list[int]:
@@ -16,7 +17,7 @@ class Settings:
     redis_port = os.getenv("REDIS_PORT", "6379")
     redis_password = os.getenv("REDIS_PASSWORD", "")
     redis_url = (
-        f"redis://:{redis_password}@{redis_host}:{redis_port}"
+        f"redis://:{quote(redis_password, safe='')}@{redis_host}:{redis_port}"
         if redis_password
         else f"redis://{redis_host}:{redis_port}"
     )
