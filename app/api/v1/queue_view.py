@@ -53,8 +53,6 @@ async def create_queue(
         "subject": meta.subject,
         "subject_name": meta.subject_name,
         "queue_type": meta.queue_type,
-        "taken_positions": meta.taken_positions,
-        "total_positions": meta.total_positions,
     }))
     return {"status": "created", "data": meta_json}
 

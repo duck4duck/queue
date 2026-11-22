@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from base64 import urlsafe_b64encode
+from random import choice
 
 from aiogram import Bot, Dispatcher
 from aiogram.enums import ParseMode
@@ -19,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 bot = Bot(token=settings.telegram_bot_token)
 dispatcher = Dispatcher()
+
+QUEUE_EMOJIS = ("📋", "✨", "📚", "🎯", "🚀", "🎉")
+SWAP_EMOJIS = ("🔄", "🔁", "🤝", "🔀", "↔️", "🔃")
 
 
 def queue_button(subject: str) -> InlineKeyboardMarkup:
@@ -74,12 +78,16 @@ async def publish_events() -> None:
 
 
 async def notify_swap(event: dict) -> None:
-    sender = bold(event.get("from_name") or "Участник очереди")
+    sender = " ".join((event.get("from_name") or "").split()) or "Другой участник"
+    positions = (
+        f"Вы будете на месте #{event['from_position']}\n"
+        f"{sender} станет #{event['to_position']}"
+    )
+    quote = markdown_decoration.blockquote(markdown_decoration.quote(positions))
     text = (
-        f"🔄 *Запрос на обмен*\n"
+        f"{choice(SWAP_EMOJIS)} *Запрос на обмен*\n"
         f"{bold(queue_title(event))}\n\n"
-        f"{sender} предлагает поменяться местами\n"
-        f"Ваше место: *№{event['to_position']}* → *№{event['from_position']}*"
+        f"{quote}"
     )
     note = (event.get("message") or "").strip()
     if note:
@@ -96,16 +104,18 @@ async def notify_swap(event: dict) -> None:
 
 
 async def notify_groups(event: dict, redis: Redis) -> None:
-    text = f"📋 {bold('Новая очередь!')}\n{bold(queue_title(event))}"
-    taken, total = event.get("taken_positions"), event.get("total_positions")
-    if taken is not None and total is not None:
-        text += f"\n\nЗанято мест: *{taken} из {total}*"
+    text = f"{bold('Новая очередь!')}\n{bold(queue_title(event))}"
     markup = queue_button(event["subject"])
     group_ids = await redis.smembers("telegram_bot_groups")
     group_ids.update(map(str, settings.group_ids))
     for group_id in group_ids:
         try:
-            await bot.send_message(group_id, text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=markup)
+            await bot.send_message(
+                group_id,
+                f"{choice(QUEUE_EMOJIS)} {text}",
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=markup,
+            )
         except Exception:
             logger.exception("Could not announce a queue to group %s", group_id)
 
