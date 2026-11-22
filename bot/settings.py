@@ -2,6 +2,16 @@ import json
 import os
 from urllib.parse import quote
 
+DEFAULT_QUEUE_SHARE_URL_TEMPLATE = "https://t.me/queue_college_bot/queue?startapp={subject}"
+LEGACY_QUEUE_SHARE_URL_TEMPLATE = "https://t.me/your_bot/your_app?startapp={subject}"
+
+
+def _queue_share_url_template() -> str:
+    configured = os.getenv("QUEUE_SHARE_URL_TEMPLATE", "").strip()
+    if not configured or configured == LEGACY_QUEUE_SHARE_URL_TEMPLATE:
+        return DEFAULT_QUEUE_SHARE_URL_TEMPLATE
+    return configured
+
 
 def _int_list(value: str) -> list[int]:
     if not value.strip():
@@ -21,10 +31,7 @@ class Settings:
         if redis_password
         else f"redis://{redis_host}:{redis_port}"
     )
-    queue_share_url_template = os.getenv(
-        "QUEUE_SHARE_URL_TEMPLATE",
-        "https://t.me/your_bot/your_app?startapp={subject}",
-    )
+    queue_share_url_template = _queue_share_url_template()
     group_ids = _int_list(os.getenv("TELEGRAM_GROUP_IDS", ""))
 
 
