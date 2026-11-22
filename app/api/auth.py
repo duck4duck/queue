@@ -51,7 +51,10 @@ async def get_authenticated_tg_id(
             detail="Telegram authentication is required",
         )
     try:
-        return verify_telegram_init_data(init_data, settings.telegram_bot_token)
+        tg_id = verify_telegram_init_data(init_data, settings.telegram_bot_token)
+        if settings.telegram_whitelist and tg_id not in settings.telegram_whitelist:
+            raise HTTPException(status_code=403, detail="Telegram user is not in the whitelist")
+        return tg_id
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -65,3 +68,8 @@ def require_actor(actor_tg_id: int, authenticated_tg_id: int) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Telegram identity does not match the requested actor",
         )
+
+
+def require_admin(tg_id: int) -> None:
+    if tg_id not in settings.telegram_admins:
+        raise HTTPException(status_code=403, detail="Telegram user is not an administrator")

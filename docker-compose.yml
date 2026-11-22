@@ -70,6 +70,23 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  bot:
+    build:
+      context: .
+      dockerfile: bot/Dockerfile
+    container_name: queue_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      redis:
+        condition: service_healthy
+    profiles:
+      - bot
+
   # Development / Debugging GUI tools (only launched with --profile dev)
   pgadmin:
     image: dpage/pgadmin4

@@ -1,3 +1,4 @@
+import json
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
@@ -47,6 +48,12 @@ async def create_queue(
         "subject": meta.subject,
         "data": meta_json,
     })
+    await r.publish("queue_events", json.dumps({
+        "type": "queue_created",
+        "subject": meta.subject,
+        "subject_name": meta.subject_name,
+        "queue_type": meta.queue_type,
+    }))
     return {"status": "created", "data": meta_json}
 
 

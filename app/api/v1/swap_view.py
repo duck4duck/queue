@@ -1,3 +1,4 @@
+import json
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
@@ -53,6 +54,14 @@ async def create_swap_request(
             "message": f"{result.from_name or 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ'} РїСЂРµРґР»Р°РіР°РµС‚ РѕР±РјРµРЅ (РјРµСЃС‚Рѕ {result.from_position} в†” {result.to_position}){note}",
         },
     )
+    await r.publish("queue_events", json.dumps({
+        "type": "swap_request",
+        "to_tg_id": result.to_tg_id,
+        "from_name": result.from_name,
+        "subject": result.subject,
+        "from_position": result.from_position,
+        "to_position": result.to_position,
+    }))
 
     return {"status": "swap_request_created", "data": result_json}
 

@@ -5,6 +5,13 @@ from pydantic import field_validator
 from sqlalchemy.engine import URL
 
 
+# Telegram IDs can be placed here while access lists are being managed in code.
+# An empty participant list means that every authenticated Telegram user is allowed.
+TELEGRAM_WHITELIST_IDS: list[int] = []
+TELEGRAM_ADMIN_IDS: list[int] = [1006402153,997211041,893807304,1122397134]
+DEFAULT_QUEUE_SHARE_URL_TEMPLATE = "https://t.me/queue_college_bot/queue?startapp={subject}"
+
+
 class Settings(BaseSettings):
     app_name: str = "Queue Management API"
     app_version: str = "2.1.0"
@@ -24,6 +31,9 @@ class Settings(BaseSettings):
     redis_password: str = ""
     redis_max_connections: int = 50
     telegram_bot_token: str = ""
+    telegram_whitelist: list[int] = TELEGRAM_WHITELIST_IDS
+    telegram_admins: list[int] = TELEGRAM_ADMIN_IDS
+    queue_share_url_template: str = DEFAULT_QUEUE_SHARE_URL_TEMPLATE
 
     # CORS
     cors_origins: Union[list[str], str] = ["*"]
@@ -48,6 +58,20 @@ class Settings(BaseSettings):
                     pass
             return [i.strip() for i in v.split(",") if i.strip()]
         return [str(i) for i in v]
+
+    @field_validator("telegram_whitelist", "telegram_admins", mode="before")
+    @classmethod
+    def parse_telegram_ids(cls, value: list[int] | str) -> list[int]:
+        if isinstance(value, str):
+            value = value.strip()
+            if value.startswith("["):
+                try:
+                    value = json.loads(value)
+                except json.JSONDecodeError:
+                    value = []
+            else:
+                value = value.split(",") if value else []
+        return [int(item) for item in value if str(item).strip()]
 
     @property
     def database_url(self) -> str:

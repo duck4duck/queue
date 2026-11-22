@@ -102,7 +102,10 @@ async def _authenticate_websocket(websocket: WebSocket) -> int | None:
         await websocket.close(code=1008, reason="Telegram authentication is required")
         return None
     try:
-        return verify_telegram_init_data(init_data, settings.telegram_bot_token)
+        tg_id = verify_telegram_init_data(init_data, settings.telegram_bot_token)
+        if settings.telegram_whitelist and tg_id not in settings.telegram_whitelist:
+            raise ValueError("Telegram user is not in the whitelist")
+        return tg_id
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         await websocket.close(code=1008, reason="Invalid Telegram authentication data")
         return None

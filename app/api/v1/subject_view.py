@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.postgres.database import get_db
 from app.services.subject_service import SubjectService
-from app.api.auth import get_authenticated_tg_id
+from app.api.auth import get_authenticated_tg_id, require_admin
 from app.schemas.subject import Subject, SubjectResponse, ListOfSubjects
 
 router = APIRouter(prefix="/api/subjects", tags=["subjects"])
@@ -33,6 +33,7 @@ async def create_subject(
     authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
 ):
+    require_admin(authenticated_tg_id)
     """Create a new subject in the catalog (e.g. 'РњР°С‚РµРјР°С‚РёРєР°', 'Р¤РёР·РёРєР°')."""
     service = SubjectService(db)
     return await service.create_subject(subject)
@@ -44,6 +45,7 @@ async def delete_subject_by_name(
     authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
 ):
+    require_admin(authenticated_tg_id)
     """Delete a subject by its exact name."""
     service = SubjectService(db)
     return await service.delete_subject_by_name(name)
@@ -55,6 +57,7 @@ async def delete_subject(
     authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
 ):
+    require_admin(authenticated_tg_id)
     """Delete a subject by its ID."""
     service = SubjectService(db)
     return await service.delete_subject(id)

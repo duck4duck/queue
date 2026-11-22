@@ -81,6 +81,10 @@ docker compose -f docker-compose.prod.yml up -d --build
 docker compose exec app alembic upgrade head
 ```
 
+### Telegram bot
+
+The bot is a separate Compose service. Start it with `docker compose --profile bot up -d --build`. It shares Redis with the API, listens for queue and swap events, sends swap notifications to users, and announces new queues in groups where it was added. The bot stores those group chat IDs in Redis. Configure `TELEGRAM_BOT_TOKEN` and `QUEUE_SHARE_URL_TEMPLATE` in `.env`. The template must match the frontend's existing share-link format and include `{subject}` as the queue-key placeholder.
+
 ---
 
 ## 🔒 3. Настройка SSL / HTTPS (Let's Encrypt)
@@ -151,3 +155,5 @@ docker compose --profile dev down
 ## Telegram authentication
 
 Set `TELEGRAM_BOT_TOKEN` in `.env` to the token of the bot that hosts the Web App. The frontend must send the raw `Telegram.WebApp.initData` value in the `X-Telegram-Init-Data` header on authenticated API requests and as the `init_data` query parameter on WebSocket connections. The backend rejects protected requests when this setting is empty.
+
+Telegram access lists are currently configured in code in `app/core/config.py`, in `TELEGRAM_WHITELIST_IDS` and `TELEGRAM_ADMIN_IDS`. An empty `TELEGRAM_WHITELIST_IDS` allows every authenticated Telegram user. An empty `TELEGRAM_ADMIN_IDS` disables subject creation and deletion for everyone.
