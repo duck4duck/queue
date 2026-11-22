@@ -6,6 +6,8 @@ from app.db.postgres.database import AsyncSessionLocal
 from app.db.redis.redis_client import get_redis_client
 from app.services.queue_service import QueueService
 from app.core.logger import logger
+from app.api.auth import verify_telegram_init_data
+from app.core.config import settings
 
 router = APIRouter(tags=["websocket"])
 
@@ -27,6 +29,8 @@ async def _handle_ping_pong(websocket: WebSocket, raw: str) -> None:
 @router.websocket("/ws/queue/{subject}")
 async def queue_websocket(websocket: WebSocket, subject: str):
     """Queue room WebSocket: broadcasts real-time queue changes to everyone viewing this queue."""
+    if not await _authenticate_websocket(websocket):
+        return
     client_host = websocket.client.host if websocket.client else "unknown"
     await manager.connect(websocket, subject)
     logger.info(f"WebSocket connected to queue '{subject}' from {client_host}")
@@ -39,7 +43,11 @@ async def queue_websocket(websocket: WebSocket, subject: str):
             queue_data = await queue_service.get_queue(subject)
 
         await websocket.send_json(
-            {"event": "queue_updated", "data": queue_data.model_dump(mode="json")}
+            {
+                "event": "queue_updated",
+                "subject": subject,
+                "data": queue_data.model_dump(mode="json"),
+            }
         )
 
         while True:
@@ -57,6 +65,13 @@ async def queue_websocket(websocket: WebSocket, subject: str):
 @router.websocket("/ws/user/{tg_id}")
 async def user_websocket(websocket: WebSocket, tg_id: int):
     """Personal WebSocket: delivers private real-time push notifications to a specific user."""
+    authenticated_tg_id = await _authenticate_websocket(websocket)
+    if authenticated_tg_id is None:
+        return
+    if authenticated_tg_id != tg_id:
+        await websocket.close(code=1008, reason="Telegram user ID does not match")
+        return
+
     client_host = websocket.client.host if websocket.client else "unknown"
     await manager.connect_user(websocket, tg_id)
     logger.info(f"Personal WebSocket connected for user tg_id={tg_id} from {client_host}")
@@ -76,3 +91,18 @@ async def user_websocket(websocket: WebSocket, tg_id: int):
     except Exception as e:
         logger.error(f"Personal WebSocket error for user tg_id={tg_id} ({client_host}): {e}")
         manager.disconnect_user(websocket, tg_id)
+
+
+async def _authenticate_websocket(websocket: WebSocket) -> int | None:
+    if not settings.telegram_bot_token:
+        await websocket.close(code=1011, reason="Telegram authentication is not configured")
+        return None
+    init_data = websocket.query_params.get("init_data")
+    if not init_data:
+        await websocket.close(code=1008, reason="Telegram authentication is required")
+        return None
+    try:
+        return verify_telegram_init_data(init_data, settings.telegram_bot_token)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        await websocket.close(code=1008, reason="Invalid Telegram authentication data")
+        return None

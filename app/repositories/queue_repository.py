@@ -31,22 +31,55 @@ class QueueRepository:
     async def meta_exists(self, subject: str) -> bool:
         return await self.r.exists(self._meta_key(subject)) == 1
 
-    async def add(self, subject: str, user_id: int, position: int) -> bool:
-        """Atomic slot assignment. Uses HSETNX to prevent race conditions.
-        Returns True if slot was acquired, False if already taken."""
-        key = self._queue_key(subject)
-        is_new = not await self.r.exists(key)
+    async def add(self, subject: str, user_id: int, position: int) -> int:
+        """Atomically add a user to a free slot and update their queue index.
 
-        acquired = await self.r.hsetnx(key, str(position), str(user_id))
-        if not acquired:
-            return False
+        Returns 1 on success, 0 if the slot is taken, -1 if the user is
+        already in the queue, and -2 if the queue does not exist.
+        """
+        script = """
+        local queue_key = KEYS[1]
+        local meta_key = KEYS[2]
+        local user_index_key = KEYS[3]
+        local position = ARGV[1]
+        local user_id = ARGV[2]
+        local default_ttl = tonumber(ARGV[3])
 
-        if is_new:
-            meta_ttl = await self.r.ttl(self._meta_key(subject))
-            ttl = meta_ttl if (meta_ttl and meta_ttl > 0) else TWO_WEEKS_SECONDS
-            await self.r.expire(key, ttl)
+        if redis.call('EXISTS', meta_key) == 0 then
+            return -2
+        end
 
-        return True
+        local users = redis.call('HGETALL', queue_key)
+        for i = 1, #users, 2 do
+            if users[i + 1] == user_id then
+                return -1
+            end
+        end
+
+        if redis.call('HEXISTS', queue_key, position) == 1 then
+            return 0
+        end
+
+        redis.call('HSET', queue_key, position, user_id)
+        redis.call('SADD', user_index_key, ARGV[4])
+
+        local meta_ttl = redis.call('TTL', meta_key)
+        local ttl = meta_ttl > 0 and meta_ttl or default_ttl
+        redis.call('EXPIRE', queue_key, ttl)
+        return 1
+        """
+        result = await self.r.eval(
+            script,
+            3,
+            self._queue_key(subject),
+            self._meta_key(subject),
+            f"user_queues:{user_id}",
+            str(position),
+            str(user_id),
+            str(TWO_WEEKS_SECONDS),
+            subject,
+        )
+        return int(result)
 
     async def remove(self, subject: str, position: int) -> None:
         await self.r.hdel(self._queue_key(subject), str(position))

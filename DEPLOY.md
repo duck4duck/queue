@@ -147,3 +147,7 @@ docker compose --profile dev up -d
 ```bash
 docker compose --profile dev down
 ```
+
+## Telegram authentication
+
+Set `TELEGRAM_BOT_TOKEN` in `.env` to the token of the bot that hosts the Web App. The frontend must send the raw `Telegram.WebApp.initData` value in the `X-Telegram-Init-Data` header on authenticated API requests and as the `init_data` query parameter on WebSocket connections. The backend rejects protected requests when this setting is empty.

@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 from app.db.postgres.database import get_db
 from app.db.redis.redis_client import get_redis
+from app.api.auth import get_authenticated_tg_id, require_actor
 from app.api.ws_manager import manager
 from app.services.queue_service import QueueService
 from app.schemas.dto import (
@@ -27,10 +28,12 @@ router = APIRouter(prefix="/queue", tags=["queue"])
 @router.post("/create")
 async def create_queue(
     data: QueueCreateDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
-    """Create a new queue under a subject (e.g. subject_name='Математика', queue_type='Лаба 1')."""
+    require_actor(data.created_by_tg_id, authenticated_tg_id)
+    """Create a new queue under a subject (e.g. subject_name='РњР°С‚РµРјР°С‚РёРєР°', queue_type='Р›Р°Р±Р° 1')."""
     queue_service = QueueService(db, r)
     meta = await queue_service.create_queue(
         subject_name=data.subject_name,
@@ -148,10 +151,12 @@ async def get_queue_history(
 async def join_queue(
     subject: str,
     user_data: UserDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
     """Join the queue at a specified free position (1..30)."""
+    require_actor(user_data.tg_id, authenticated_tg_id)
     queue_service = QueueService(db, r)
     queue_data = await queue_service.join(subject, user_data.tg_id, user_data.position)
 
@@ -169,10 +174,12 @@ async def join_queue(
 async def leave_queue(
     subject: str,
     user_data: UserDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
     """Leave the queue."""
+    require_actor(user_data.tg_id, authenticated_tg_id)
     queue_service = QueueService(db, r)
     queue_data = await queue_service.leave(subject, user_data.tg_id, user_data.position)
 
@@ -190,17 +197,20 @@ async def leave_queue(
 async def move_queue_position(
     subject: str,
     user_data: UserDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
     """Atomically move participant to a free position in the queue."""
+    require_actor(user_data.tg_id, authenticated_tg_id)
     queue_service = QueueService(db, r)
-    await queue_service.move(subject, user_data.tg_id, user_data.position)
-
-    queue_data = await queue_service.get_queue(subject)
-    event_data = {"event": "queue_updated", "subject": subject, "data": queue_data.model_dump(mode="json")}
-    await manager.broadcast(subject, event_data)
-    await manager.broadcast_all(event_data)
+    queue_data = await queue_service.move(subject, user_data.tg_id, user_data.position)
+    event_data = {
+        "event": "queue_updated",
+        "subject": subject,
+        "data": queue_data.model_dump(mode="json"),
+    }
+    await manager.broadcast_room_and_all(subject, event_data)
 
     return {"status": "moved", "position": user_data.position}
 
@@ -209,10 +219,12 @@ async def move_queue_position(
 async def kick_from_queue(
     subject: str,
     data: KickDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
     """Curator removes a student from the queue."""
+    require_actor(data.curator_tg_id, authenticated_tg_id)
     queue_service = QueueService(db, r)
     await queue_service.kick(subject, data.curator_tg_id, data.target_tg_id)
 
@@ -230,7 +242,7 @@ async def kick_from_queue(
         {
             "event": "kicked",
             "subject": subject,
-            "message": "Вы были удалены из очереди создателем.",
+            "message": "Р’С‹ Р±С‹Р»Рё СѓРґР°Р»РµРЅС‹ РёР· РѕС‡РµСЂРµРґРё СЃРѕР·РґР°С‚РµР»РµРј.",
         },
     )
 
@@ -241,10 +253,12 @@ async def kick_from_queue(
 async def advance_queue(
     subject: str,
     data: AdvanceQueueDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
     """Curator calls 'Next': marks current person in front as completed and removes them."""
+    require_actor(data.curator_tg_id, authenticated_tg_id)
     queue_service = QueueService(db, r)
     completed_user_id, updated_queue = await queue_service.advance_queue(
         subject, data.curator_tg_id
@@ -263,7 +277,7 @@ async def advance_queue(
         {
             "event": "submission_completed",
             "subject": subject,
-            "message": "Ваша сдача завершена!",
+            "message": "Р’Р°С€Р° СЃРґР°С‡Р° Р·Р°РІРµСЂС€РµРЅР°!",
         },
     )
 
@@ -275,7 +289,7 @@ async def advance_queue(
             {
                 "event": "your_turn",
                 "subject": subject,
-                "message": "Вы следующий в очереди! Подойдите к преподавателю.",
+                "message": "Р’С‹ СЃР»РµРґСѓСЋС‰РёР№ РІ РѕС‡РµСЂРµРґРё! РџРѕРґРѕР№РґРёС‚Рµ Рє РїСЂРµРїРѕРґР°РІР°С‚РµР»СЋ.",
             },
         )
 
@@ -286,10 +300,12 @@ async def advance_queue(
 async def pause_queue(
     subject: str,
     data: PauseQueueDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
     """Curator pauses or resumes queue."""
+    require_actor(data.curator_tg_id, authenticated_tg_id)
     queue_service = QueueService(db, r)
     meta = await queue_service.pause_queue(subject, data.curator_tg_id, data.paused)
 
@@ -307,10 +323,12 @@ async def pause_queue(
 async def update_auto_delete(
     subject: str,
     data: UpdateAutoDeleteDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
     """Curator/Creator updates or clears auto-deletion expiration time."""
+    require_actor(data.curator_tg_id, authenticated_tg_id)
     queue_service = QueueService(db, r)
     meta = await queue_service.update_auto_delete(subject, data.curator_tg_id, data.auto_delete_at)
 
@@ -329,10 +347,12 @@ async def update_auto_delete(
 async def clear_queue(
     subject: str,
     data: ClearQueueDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
     """Curator resets/clears all participants from the queue without deleting the queue."""
+    require_actor(data.curator_tg_id, authenticated_tg_id)
     queue_service = QueueService(db, r)
     updated_queue = await queue_service.clear_queue(subject, data.curator_tg_id)
     updated_queue_json = updated_queue.model_dump(mode="json")
@@ -351,10 +371,12 @@ async def clear_queue(
 async def delete_queue(
     subject: str,
     curator_tg_id: int = Query(..., description="Telegram ID of the curator performing the deletion"),
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
     """Curator deletes the entire queue."""
+    require_actor(curator_tg_id, authenticated_tg_id)
     queue_service = QueueService(db, r)
     await queue_service.delete_queue(subject, curator_tg_id)
 
@@ -369,11 +391,13 @@ async def delete_queue(
 async def swap_in_queue(
     subject: str,
     user_data: SwapDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
     """Direct instant swap between positions (legacy/manual swap)."""
     queue_service = QueueService(db, r)
+    await queue_service._check_creator(subject, authenticated_tg_id)
     await queue_service.swap(user_data.position1, user_data.position2, subject)
 
     queue_data = await queue_service.get_queue(subject)

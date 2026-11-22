@@ -101,6 +101,8 @@ class QueueService:
         creator = await self.user_service.get_user_by_tg_id(created_by_tg_id)
         if creator is None:
             raise UserNotFound("Пользователь не найден!")
+        if creator.role != "curator":
+            raise Forbidden("Только куратор может создавать очереди!")
 
         db_subject = await self.subject_repo.get_by_name(subject_name)
         if db_subject is None:
@@ -147,6 +149,8 @@ class QueueService:
         user = await self.user_service.get_user_by_tg_id(user_tg_id)
         if user is None:
             raise UserNotFound("Пользователь не найден!")
+        if user.role != "curator":
+            raise Forbidden("Только куратор может управлять этой очередью!")
         meta = await self.queue_repo.get_queue_meta(subject)
         if meta is None:
             raise QueueNotFound("Очередь не найдена!")
@@ -303,14 +307,14 @@ class QueueService:
         if position < 1 or position > self.max_positions:
             raise InvalidPosition(f"Некорректный номер позиции. Число должно быть от 1 до {self.max_positions}!")
 
-        if await self.queue_repo.is_user_in_queue(subject, user_id):
+        add_result = await self.queue_repo.add(subject, user_id, position)
+        if add_result == -2:
+            raise QueueNotFound("Очередь не найдена!")
+        if add_result == -1:
             raise UserAlreadyInQueue("Вы уже находитесь в этой очереди!")
-
-        acquired = await self.queue_repo.add(subject, user_id, position)
-        if not acquired:
+        if add_result == 0:
             raise PositionTaken(f"Позиция {position} уже занята другим участником!")
 
-        await self.queue_repo.add_user_to_index(user_id, subject)
         await self.queue_repo.log_event(subject, "join", f"{user.name} занял(а) место #{position}")
         logger.info(f"User {user.name} (tg_id={user_id}) joined '{subject}' at pos #{position}")
 
@@ -334,7 +338,7 @@ class QueueService:
         return await self.get_queue(subject)
 
     async def move(self, subject: str, user_id: int, position: int) -> QueueResponse:
-        if await self.r.is_queue_paused(subject):
+        if await self.queue_repo.is_queue_paused(subject):
             raise QueuePaused("Очередь приостановлена! Смена мест временно закрыта.")
 
         user = await self.user_service.get_user_by_tg_id(user_id)
@@ -344,7 +348,7 @@ class QueueService:
         if position < 1 or position > self.max_positions:
             raise InvalidPosition(f"Некорректный номер позиции. Число должно быть от 1 до {self.max_positions}!")
 
-        result = await self.r.move_user(subject, user_id, position)
+        result = await self.queue_repo.move_user(subject, user_id, position)
         if result == -1:
             raise PositionTaken(f"Позиция {position} уже занята другим участником!")
         if result == -2:
@@ -354,7 +358,11 @@ class QueueService:
 
         old_position = result
         await self.swap_repo.cancel_all_for_user_in_queue(subject, user_id)
-        await self.r.log_event(subject, "move", f"{user.name} перешел(ла) с места #{old_position} на #{position}")
+        await self.queue_repo.log_event(
+            subject,
+            "move",
+            f"{user.name} перешел(ла) с места #{old_position} на #{position}",
+        )
         logger.info(f"User {user.name} (tg_id={user_id}) moved in '{subject}' from #{old_position} to #{position}")
 
         return await self.get_queue(subject)
@@ -416,7 +424,10 @@ class QueueService:
 
     async def get_queue(self, subject: str) -> QueueResponse:
         meta = await self.queue_repo.get_queue_meta(subject)
-        if meta and meta.get("auto_delete_at"):
+        if meta is None:
+            raise QueueNotFound("Очередь не найдена!")
+
+        if meta.get("auto_delete_at"):
             exp_dt = parse_utc_datetime(meta["auto_delete_at"])
             if exp_dt and datetime.now(timezone.utc) >= exp_dt:
                 await self.queue_repo.clear(subject)

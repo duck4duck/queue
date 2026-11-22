@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 from app.db.postgres.database import get_db
 from app.db.redis.redis_client import get_redis
+from app.api.auth import get_authenticated_tg_id, require_actor
 from app.api.ws_manager import manager
 from app.services.swap_request_service import SwapRequestService
 from app.services.queue_service import QueueService
@@ -15,9 +16,11 @@ router = APIRouter(prefix="/queue", tags=["swap-requests"])
 async def create_swap_request(
     subject: str,
     data: SwapRequestCreateDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
+    require_actor(data.from_tg_id, authenticated_tg_id)
     """Create a swap proposal from user A to whoever is at to_position, attaching a text message."""
     service = SwapRequestService(db, r)
 
@@ -35,6 +38,7 @@ async def create_swap_request(
         subject,
         {
             "event": "swap_request_created",
+            "subject": subject,
             "data": result_json,
         },
     )
@@ -46,7 +50,7 @@ async def create_swap_request(
         {
             "event": "incoming_swap_request",
             "data": result_json,
-            "message": f"{result.from_name or 'Пользователь'} предлагает обмен (место {result.from_position} ↔ {result.to_position}){note}",
+            "message": f"{result.from_name or 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ'} РїСЂРµРґР»Р°РіР°РµС‚ РѕР±РјРµРЅ (РјРµСЃС‚Рѕ {result.from_position} в†” {result.to_position}){note}",
         },
     )
 
@@ -57,9 +61,11 @@ async def create_swap_request(
 async def get_incoming_swap_requests(
     subject: str,
     tg_id: int,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
+    require_actor(tg_id, authenticated_tg_id)
     """Get all pending swap requests received by this user in this queue (or all queues if subject=='all')."""
     service = SwapRequestService(db, r)
     if subject == "all":
@@ -71,9 +77,11 @@ async def get_incoming_swap_requests(
 async def get_outgoing_swap_requests(
     subject: str,
     tg_id: int,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
+    require_actor(tg_id, authenticated_tg_id)
     """Get all pending swap requests sent by this user in this queue (or all queues if subject=='all')."""
     service = SwapRequestService(db, r)
     if subject == "all":
@@ -85,9 +93,11 @@ async def get_outgoing_swap_requests(
 async def accept_swap_request(
     request_id: str,
     data: SwapRequestRespondDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
+    require_actor(data.tg_id, authenticated_tg_id)
     """Accept an incoming swap request with an optional response message.
     Positions are immediately swapped and real-time updates broadcast."""
     service = SwapRequestService(db, r)
@@ -121,7 +131,7 @@ async def accept_swap_request(
             "event": "swap_accepted",
             "subject": result.subject,
             "data": result_json,
-            "message": f"{result.to_name or 'Пользователь'} принял ваш запрос на обмен!",
+            "message": f"{result.to_name or 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ'} РїСЂРёРЅСЏР» РІР°С€ Р·Р°РїСЂРѕСЃ РЅР° РѕР±РјРµРЅ!",
         },
     )
 
@@ -132,9 +142,11 @@ async def accept_swap_request(
 async def reject_swap_request(
     request_id: str,
     data: SwapRequestRespondDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
+    require_actor(data.tg_id, authenticated_tg_id)
     """Reject an incoming swap request with an optional explanation message."""
     service = SwapRequestService(db, r)
 
@@ -151,6 +163,7 @@ async def reject_swap_request(
         result.subject,
         {
             "event": "swap_request_rejected",
+            "subject": result.subject,
             "data": result_json,
         },
     )
@@ -162,7 +175,7 @@ async def reject_swap_request(
             "event": "swap_rejected",
             "subject": result.subject,
             "data": result_json,
-            "message": f"{result.to_name or 'Пользователь'} отклонил ваш запрос на обмен",
+            "message": f"{result.to_name or 'РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ'} РѕС‚РєР»РѕРЅРёР» РІР°С€ Р·Р°РїСЂРѕСЃ РЅР° РѕР±РјРµРЅ",
         },
     )
 
@@ -173,9 +186,11 @@ async def reject_swap_request(
 async def cancel_swap_request(
     request_id: str,
     data: SwapRequestCancelDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
     db: AsyncSession = Depends(get_db),
     r: Redis = Depends(get_redis),
 ):
+    require_actor(data.tg_id, authenticated_tg_id)
     """Cancel a pending outgoing swap request (sender only)."""
     service = SwapRequestService(db, r)
 
@@ -190,6 +205,7 @@ async def cancel_swap_request(
         result.subject,
         {
             "event": "swap_request_cancelled",
+            "subject": result.subject,
             "data": result_json,
         },
     )
@@ -201,7 +217,7 @@ async def cancel_swap_request(
             "event": "swap_cancelled",
             "subject": result.subject,
             "data": result_json,
-            "message": "Запрос на обмен был отозван отправителем.",
+            "message": "Р—Р°РїСЂРѕСЃ РЅР° РѕР±РјРµРЅ Р±С‹Р» РѕС‚РѕР·РІР°РЅ РѕС‚РїСЂР°РІРёС‚РµР»РµРј.",
         },
     )
 

@@ -49,7 +49,7 @@ class SubjectRepository:
         return True
 
     async def delete_by_name(self, name: str) -> bool:
-        stmt = select(Subject).where(Subject.name.ilike(name))
+        stmt = select(Subject).where(Subject.name == name)
         result = await self.db.execute(stmt)
         subjects = list(result.scalars().all())
         if not subjects:

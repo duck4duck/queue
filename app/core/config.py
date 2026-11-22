@@ -2,6 +2,7 @@ import json
 from typing import Union
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
+from sqlalchemy.engine import URL
 
 
 class Settings(BaseSettings):
@@ -22,6 +23,7 @@ class Settings(BaseSettings):
     redis_port: str = "6379"
     redis_password: str = ""
     redis_max_connections: int = 50
+    telegram_bot_token: str = ""
 
     # CORS
     cors_origins: Union[list[str], str] = ["*"]
@@ -49,10 +51,15 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
-        return (
-            f"postgresql+asyncpg://{self.db_user}:{self.db_password}"
-            f"@{self.db_host}:{self.db_port}/{self.db_name}"
+        url = URL.create(
+            "postgresql+asyncpg",
+            username=self.db_user,
+            password=self.db_password,
+            host=self.db_host,
+            port=int(self.db_port),
+            database=self.db_name,
         )
+        return url.render_as_string(hide_password=False)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
