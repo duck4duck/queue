@@ -2,7 +2,6 @@ from fastapi import APIRouter, Depends, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.postgres.database import get_db
 from app.services.subject_service import SubjectService
-from app.services.user_service import UserService
 from app.api.auth import get_authenticated_tg_id
 from app.schemas.subject import Subject, SubjectResponse, ListOfSubjects
 
@@ -35,21 +34,8 @@ async def create_subject(
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new subject in the catalog (e.g. 'РњР°С‚РµРјР°С‚РёРєР°', 'Р¤РёР·РёРєР°')."""
-    await UserService(db).require_curator(authenticated_tg_id)
     service = SubjectService(db)
     return await service.create_subject(subject)
-
-
-@router.delete("/{id}", status_code=status.HTTP_200_OK)
-async def delete_subject(
-    id: int,
-    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
-    db: AsyncSession = Depends(get_db),
-):
-    """Delete a subject by its ID."""
-    await UserService(db).require_curator(authenticated_tg_id)
-    service = SubjectService(db)
-    return await service.delete_subject(id)
 
 
 @router.delete("/by-name/{name}", status_code=status.HTTP_200_OK)
@@ -59,6 +45,16 @@ async def delete_subject_by_name(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a subject by its exact name."""
-    await UserService(db).require_curator(authenticated_tg_id)
     service = SubjectService(db)
     return await service.delete_subject_by_name(name)
+
+
+@router.delete("/{id}", status_code=status.HTTP_200_OK)
+async def delete_subject(
+    id: int,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a subject by its ID."""
+    service = SubjectService(db)
+    return await service.delete_subject(id)
