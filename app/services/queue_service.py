@@ -101,8 +101,6 @@ class QueueService:
         creator = await self.user_service.get_user_by_tg_id(created_by_tg_id)
         if creator is None:
             raise UserNotFound("Пользователь не найден!")
-        if creator.role != "curator":
-            raise Forbidden("Только куратор может создавать очереди!")
 
         db_subject = await self.subject_repo.get_by_name(subject_name)
         if db_subject is None:
@@ -149,8 +147,6 @@ class QueueService:
         user = await self.user_service.get_user_by_tg_id(user_tg_id)
         if user is None:
             raise UserNotFound("Пользователь не найден!")
-        if user.role != "curator":
-            raise Forbidden("Только куратор может управлять этой очередью!")
         meta = await self.queue_repo.get_queue_meta(subject)
         if meta is None:
             raise QueueNotFound("Очередь не найдена!")
