@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -13,6 +15,9 @@ class QueueUserInfo(BaseModel):
 
 class QueueResponse(BaseModel):
     subject: str
+    subject_name: str = ""
+    queue_type: str = ""
+    queue_date: date | None = None
     queue: list[QueueUserInfo]
     total_positions: int
     taken_positions: int
@@ -26,6 +31,7 @@ class QueueMetaInfo(BaseModel):
     subject: str
     subject_name: str
     queue_type: str
+    queue_date: date | None = None
     created_by_tg_id: int
     created_by_name: str | None = None
     created_at: str

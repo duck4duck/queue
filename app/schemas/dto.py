@@ -1,4 +1,7 @@
-from pydantic import BaseModel, Field
+from datetime import date
+from typing import Annotated
+
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class UserDto(BaseModel):
@@ -41,6 +44,12 @@ class QueueCreateDto(BaseModel):
     queue_type: str
     created_by_tg_id: int
     auto_delete_at: str | None = None
+    queue_date: date | None = None
+
+
+class UpdateQueueDetailsDto(BaseModel):
+    queue_type: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    queue_date: date | None
 
 
 class AdvanceQueueDto(BaseModel):

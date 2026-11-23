@@ -267,6 +267,7 @@ class QueueRepository:
         created_by_tg_id: int,
         auto_delete_at: str | None = None,
         ttl_seconds: int | None = None,
+        queue_date: str | None = None,
     ) -> dict | None:
         key = self._meta_key(subject)
         now = datetime.now(timezone.utc).isoformat()
@@ -282,6 +283,8 @@ class QueueRepository:
         }
         if auto_delete_at:
             mapping["auto_delete_at"] = auto_delete_at
+        if queue_date:
+            mapping["queue_date"] = queue_date
 
         queue_key = self._queue_key(subject)
         async with self.r.pipeline() as pipe:
@@ -302,6 +305,26 @@ class QueueRepository:
                     return mapping
                 except WatchError:
                     continue
+
+    async def update_queue_details(
+        self, subject: str, queue_type: str, queue_date: str | None, *, revision: str,
+    ) -> bool:
+        script = """
+        local revision = redis.call('HGET', KEYS[1], 'revision') or redis.call('HGET', KEYS[1], 'created_at')
+        if revision ~= ARGV[3] then
+            return 0
+        end
+        redis.call('HSET', KEYS[1], 'queue_type', ARGV[1])
+        if ARGV[2] == '' then
+            redis.call('HDEL', KEYS[1], 'queue_date')
+        else
+            redis.call('HSET', KEYS[1], 'queue_date', ARGV[2])
+        end
+        return 1
+        """
+        return bool(await self.r.eval(
+            script, 1, self._meta_key(subject), queue_type, queue_date or "", revision,
+        ))
 
     async def update_auto_delete(
         self,

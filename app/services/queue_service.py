@@ -1,5 +1,6 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from math import ceil
+from uuid import uuid4
 from app.repositories.queue_repository import QueueRepository
 from app.repositories.swap_request_repository import SwapRequestRepository
 from app.repositories.subject_repository import SubjectRepository
@@ -74,6 +75,7 @@ class QueueService:
             subject=subject,
             subject_name=meta.get("subject_name", subject),
             queue_type=meta.get("queue_type", ""),
+            queue_date=meta.get("queue_date"),
             created_by_tg_id=created_by_tg_id,
             created_by_name=creator_name,
             created_at=meta.get("created_at", datetime.now(timezone.utc).isoformat()),
@@ -96,6 +98,7 @@ class QueueService:
         queue_type: str,
         created_by_tg_id: int,
         auto_delete_at: str | None = None,
+        queue_date: date | None = None,
     ) -> QueueMetaInfo:
         """Create a new named queue for a subject (e.g. 'Math:Lab 1') with optional auto-deletion time."""
         creator = await self.user_service.get_user_by_tg_id(created_by_tg_id)
@@ -108,7 +111,7 @@ class QueueService:
                 f"Предмет '{subject_name}' не найден в каталоге! Сначала создайте предмет."
             )
 
-        subject_key = f"{subject_name}:{queue_type}"
+        subject_key = uuid4().hex if queue_date else f"{subject_name}:{queue_type}"
 
         auto_delete_at, ttl_seconds = self._parse_auto_delete_ttl(auto_delete_at)
 
@@ -119,6 +122,7 @@ class QueueService:
             created_by_tg_id=created_by_tg_id,
             auto_delete_at=auto_delete_at,
             ttl_seconds=ttl_seconds,
+            queue_date=queue_date.isoformat() if queue_date else None,
         )
         if meta is None:
             raise QueueAlreadyExists(f"Очередь '{subject_key}' уже создана!")
@@ -141,7 +145,7 @@ class QueueService:
             is_paused=False,
         )
 
-    async def _check_creator(self, subject: str, user_tg_id: int):
+    async def _check_creator(self, subject: str, user_tg_id: int, *, allow_admin: bool = False):
         user = await self.user_service.get_user_by_tg_id(user_tg_id)
         if user is None:
             raise UserNotFound("Пользователь не найден!")
@@ -149,7 +153,9 @@ class QueueService:
         if meta is None or not meta.get("created_at"):
             raise QueueNotFound("Очередь не найдена!")
         created_by = int(meta.get("created_by_tg_id", 0))
-        if created_by != user_tg_id:
+        if created_by != user_tg_id and not (allow_admin and user_tg_id in settings.telegram_admins):
+            if allow_admin:
+                raise Forbidden("Изменить очередь может её создатель или администратор!")
             raise Forbidden("Только создатель очереди имеет доступ к этому действию!")
         return meta, user
 
@@ -203,6 +209,16 @@ class QueueService:
             my_position=my_pos,
             is_paused=paused,
         )
+
+    async def update_queue_details(
+        self, subject: str, actor_tg_id: int, queue_type: str, queue_date: date | None,
+    ) -> None:
+        meta, _ = await self._check_creator(subject, actor_tg_id, allow_admin=True)
+        if not await self.queue_repo.update_queue_details(
+            subject, queue_type, queue_date.isoformat() if queue_date else None,
+            revision=self.queue_repo.get_revision(meta),
+        ):
+            raise QueueNotFound()
 
     async def update_auto_delete(
         self, subject: str, creator_tg_id: int, auto_delete_at: str | None
@@ -266,7 +282,7 @@ class QueueService:
                 continue
             if is_paused is not None and paused != is_paused:
                 continue
-            if query and all(query not in value.lower() for value in (subject, subj_name, q_type)):
+            if query and all(query not in value.lower() for value in (subj_name, q_type, f"{subj_name}:{q_type}")):
                 continue
             matching.append((subject, meta))
 
@@ -439,6 +455,9 @@ class QueueService:
             ]
             return QueueResponse(
                 subject=subject,
+                subject_name=meta.get("subject_name", subject),
+                queue_type=meta.get("queue_type", ""),
+                queue_date=meta.get("queue_date"),
                 queue=positions,
                 total_positions=self.max_positions,
                 taken_positions=0,
@@ -470,6 +489,9 @@ class QueueService:
 
         return QueueResponse(
             queue=positions,
+            subject_name=meta.get("subject_name", subject),
+            queue_type=meta.get("queue_type", ""),
+            queue_date=meta.get("queue_date"),
             taken_positions=len(queue),
             subject=subject,
             total_positions=self.max_positions,

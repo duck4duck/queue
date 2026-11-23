@@ -16,6 +16,7 @@ from app.schemas.dto import (
     PauseQueueDto,
     ClearQueueDto,
     UpdateAutoDeleteDto,
+    UpdateQueueDetailsDto,
 )
 from app.schemas.queue import (
     MyPositionResponse,
@@ -41,6 +42,7 @@ async def create_queue(
         queue_type=data.queue_type,
         created_by_tg_id=data.created_by_tg_id,
         auto_delete_at=data.auto_delete_at,
+        queue_date=data.queue_date,
     )
     meta_json = meta.model_dump(mode="json")
     await manager.broadcast_all({
@@ -104,6 +106,22 @@ async def get_queue(
     """Get full state of a queue (slots 1..30)."""
     queue_service = QueueService(db, r)
     return await queue_service.get_queue(subject)
+
+
+@router.put("/{subject}/details")
+async def update_queue_details(
+    subject: str,
+    data: UpdateQueueDetailsDto,
+    authenticated_tg_id: int = Depends(get_authenticated_tg_id),
+    db: AsyncSession = Depends(get_db),
+    r: Redis = Depends(get_redis),
+):
+    queue_service = QueueService(db, r)
+    await queue_service.update_queue_details(
+        subject, authenticated_tg_id, data.queue_type, data.queue_date,
+    )
+    await manager.broadcast_room_and_all(subject, {"event": "queue_updated", "subject": subject})
+    return {"status": "updated"}
 
 
 @router.get("/{subject}/my-position/{tg_id}", response_model=MyPositionResponse)
