@@ -9,6 +9,10 @@ class UserRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def list_telegram_ids(self) -> list[int]:
+        result = await self.db.scalars(select(User.tg_id))
+        return list(result.all())
+
     async def get_all(
         self,
         search: str | None = None,

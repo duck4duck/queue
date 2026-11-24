@@ -6,6 +6,8 @@ from app.db.postgres.database import get_db
 from app.db.redis.redis_client import get_redis
 from app.api.auth import get_authenticated_tg_id, require_actor
 from app.api.ws_manager import manager
+from app.core.config import settings
+from app.repositories.user_repository import UserRepository
 from app.services.queue_service import QueueService
 from app.schemas.dto import (
     SwapDto,
@@ -36,6 +38,7 @@ async def create_queue(
 ):
     require_actor(data.created_by_tg_id, authenticated_tg_id)
     """Create a new queue under a subject (e.g. subject_name='Математика', queue_type='Лаба 1')."""
+    recipient_tg_ids = settings.telegram_whitelist or await UserRepository(db).list_telegram_ids()
     queue_service = QueueService(db, r)
     meta = await queue_service.create_queue(
         subject_name=data.subject_name,
@@ -55,6 +58,7 @@ async def create_queue(
         "subject": meta.subject,
         "subject_name": meta.subject_name,
         "queue_type": meta.queue_type,
+        "recipient_tg_ids": recipient_tg_ids,
     }))
     return {"status": "created", "data": meta_json}
 
